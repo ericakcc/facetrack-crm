@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual envs
+.venv/
+.python-version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+
+# Data (keep schema-only; ignore generated DB and large photos)
+data/*.db
+data/*.db-journal
+data/photos/*.jpg
+data/photos/*.png
+data/photos/*.jpeg
+!data/photos/.gitkeep
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
