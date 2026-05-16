@@ -12,5 +12,11 @@ def test_app_imports_and_module_objects_exist() -> None:
         del sys.modules["app"]
     module = importlib.import_module("app")
 
-    for fn_name in ("page_overview", "page_intake", "page_history", "page_treatment", "page_settings"):
+    for fn_name in (
+        "page_overview",
+        "page_intake",
+        "page_history",
+        "page_treatment",
+        "page_settings",
+    ):
         assert hasattr(module, fn_name), f"app.{fn_name} missing"

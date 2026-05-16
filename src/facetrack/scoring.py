@@ -132,8 +132,8 @@ def pore_raw(bgr: np.ndarray) -> float:
 def uniformity_raw(bgr: np.ndarray) -> float:
     """Standard deviation of the L* channel. Higher = less uniform."""
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    l = lab[..., 0]
-    return float(l.std())
+    lightness = lab[..., 0]
+    return float(lightness.std())
 
 
 def score_region(bgr: np.ndarray) -> RegionScores:
@@ -146,9 +146,7 @@ def score_region(bgr: np.ndarray) -> RegionScores:
         uniformity_raw=uniformity_raw(bgr),
     )
     return RegionScores(
-        pigmentation=_clamp_score(
-            raw.pigmentation_raw, *PIGMENTATION_RAW_RANGE
-        ),
+        pigmentation=_clamp_score(raw.pigmentation_raw, *PIGMENTATION_RAW_RANGE),
         erythema=_clamp_score(raw.erythema_raw, *ERYTHEMA_RAW_RANGE),
         wrinkle=_clamp_score(raw.wrinkle_raw, *WRINKLE_RAW_RANGE),
         pore=_clamp_score(raw.pore_raw, *PORE_RAW_RANGE),

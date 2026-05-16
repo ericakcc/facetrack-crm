@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from loguru import logger
 from sqlmodel import select
 
 from facetrack.config import PHOTOS_DIR
@@ -50,6 +49,7 @@ st.set_page_config(
 
 # ----------------------------- Bootstrap ------------------------------------
 
+
 @st.cache_resource
 def _bootstrap() -> None:
     """Initialise DB schema and seed once per app process."""
@@ -76,6 +76,7 @@ _bootstrap()
 
 
 # ----------------------------- Data access ----------------------------------
+
 
 def list_patients() -> list[Patient]:
     with get_session() as s:
@@ -107,6 +108,7 @@ def treatment_for_visit(visit_id: int) -> TreatmentNote | None:
 
 # ----------------------------- Charts ---------------------------------------
 
+
 def visit_score_dict(visit_id: int) -> dict[str, float]:
     """Aggregate per-region scores for a visit into one dict keyed by metric."""
     regions = scores_for_visit(visit_id)
@@ -126,7 +128,9 @@ def radar_chart(visits: list[Visit], scores_by_visit: dict[int, dict[str, float]
     for v in visits:
         scores = scores_by_visit.get(v.id, {})
         # Invert uniformity so high = better visually on radar
-        values = [scores.get(m, 0.0) if m != "uniformity" else 10.0 - scores.get(m, 0.0) for m in METRICS]
+        values = [
+            scores.get(m, 0.0) if m != "uniformity" else 10.0 - scores.get(m, 0.0) for m in METRICS
+        ]
         fig.add_trace(
             go.Scatterpolar(
                 r=values + [values[0]],
@@ -172,6 +176,7 @@ def line_chart(visits: list[Visit], scores_by_visit: dict[int, dict[str, float]]
 
 # ----------------------------- Sidebar --------------------------------------
 
+
 def sidebar_nav() -> tuple[Patient | None, str]:
     st.sidebar.title("✨ FaceTrack CRM")
     st.sidebar.caption("醫美診所｜智能診療系統")
@@ -205,6 +210,7 @@ def sidebar_nav() -> tuple[Patient | None, str]:
 
 # ----------------------------- Pages ----------------------------------------
 
+
 def page_overview(patient: Patient) -> None:
     st.header(f"📈 縱向追蹤｜{patient.name}")
     st.caption(f"電話：{patient.phone}　生日：{patient.birth_date}　主訴：{patient.notes}")
@@ -219,7 +225,9 @@ def page_overview(patient: Patient) -> None:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("分數雷達圖")
-        st.caption("外緣為 10 分。色素沉澱／泛紅／細紋／毛孔越靠外越嚴重；膚色均勻度已反向，越靠外越好。")
+        st.caption(
+            "外緣為 10 分。色素沉澱／泛紅／細紋／毛孔越靠外越嚴重；膚色均勻度已反向，越靠外越好。"
+        )
         st.plotly_chart(radar_chart(visits, scores_by_visit), use_container_width=True)
     with col2:
         st.subheader("分數趨勢")
@@ -246,7 +254,7 @@ def _render_quality_report(report: QualityReport) -> None:
         ("清晰度", report.sharpness, "laplacian_variance"),
         ("色彩校正", report.color, "marker_detected"),
     ]
-    for col, (name, check, key) in zip(cols, checks):
+    for col, (name, check, key) in zip(cols, checks, strict=False):
         with col:
             icon = "✅" if check.passed else "❌"
             st.metric(label=f"{icon} {name}", value=str(check.measurement.get(key, "—")))
@@ -286,10 +294,10 @@ def page_intake(patient: Patient) -> None:
     st.subheader("② 對齊與 ROI 擷取")
     cols = st.columns([2, 1, 1, 1, 1])
     cols[0].image(cv2.cvtColor(pipeline_result.aligned_image, cv2.COLOR_BGR2RGB), caption="對齊後")
-    for col, region in zip(cols[1:], Region):
+    for col, region in zip(cols[1:], Region, strict=False):
         roi = pipeline_result.rois.get(region)
         if roi is not None:
-            col.image(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB), caption=METRIC_REGION_ZH(region))
+            col.image(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB), caption=region_label_zh(region))
 
     if not report.overall_passed:
         st.warning("此照片未通過一致性檢查，可繼續評分，但不會用於縱向追蹤基準。")
@@ -301,7 +309,7 @@ def page_intake(patient: Patient) -> None:
     region_scores = score_visit(pipeline_result.rois)
     agg = aggregate_face_scores(region_scores)
     score_cols = st.columns(5)
-    for col, m in zip(score_cols, METRICS):
+    for col, m in zip(score_cols, METRICS, strict=False):
         col.metric(METRIC_LABELS_ZH[m], f"{agg[m]:.1f}")
 
     st.subheader("④ AI 解釋與治療建議草稿")
@@ -357,10 +365,12 @@ def page_intake(patient: Patient) -> None:
                 )
             )
             session.commit()
-        st.success(f"已儲存就診紀錄（visit_id={visit.id}）。請切換到『縱向追蹤』檢視更新後的趨勢圖。")
+        st.success(
+            f"已儲存就診紀錄（visit_id={visit.id}）。請切換到『縱向追蹤』檢視更新後的趨勢圖。"
+        )
 
 
-def METRIC_REGION_ZH(region: Region) -> str:
+def region_label_zh(region: Region) -> str:
     mapping = {
         Region.LEFT_CHEEK: "左頰",
         Region.RIGHT_CHEEK: "右頰",
@@ -396,7 +406,7 @@ def page_history(patient: Patient) -> None:
                 df = pd.DataFrame(
                     [
                         {
-                            "區域": METRIC_REGION_ZH(s.region),
+                            "區域": region_label_zh(s.region),
                             **{METRIC_LABELS_ZH[m]: getattr(s, m) for m in METRICS},
                         }
                         for s in scores.values()

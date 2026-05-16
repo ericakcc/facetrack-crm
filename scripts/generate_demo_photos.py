@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -106,10 +105,15 @@ def main() -> int:
     for filename, prompt, input_image in DEMO_SHOTS:
         output_path = OUTPUT_DIR / filename
         cmd = [
-            "uv", "run", str(NANO_BANANA_SCRIPT),
-            "--prompt", prompt,
-            "--filename", str(output_path),
-            "--resolution", "1K",
+            "uv",
+            "run",
+            str(NANO_BANANA_SCRIPT),
+            "--prompt",
+            prompt,
+            "--filename",
+            str(output_path),
+            "--resolution",
+            "1K",
         ]
         if input_image:
             cmd.extend(["--input-image", str(OUTPUT_DIR / input_image)])

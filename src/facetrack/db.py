@@ -14,7 +14,10 @@ from sqlmodel import Field, Relationship, Session, SQLModel, create_engine
 from facetrack.config import DB_URL
 
 
-class Gender(str, Enum):
+# NOTE: Using (str, Enum) instead of StrEnum because SQLModel + SQLAlchemy column
+# inference is well-tested against this pattern. StrEnum is the modern equivalent
+# but introduces subtle equality differences we don't need here. Suppress UP042.
+class Gender(str, Enum):  # noqa: UP042
     """Patient gender enum."""
 
     FEMALE = "female"
@@ -22,7 +25,7 @@ class Gender(str, Enum):
     OTHER = "other"
 
 
-class Region(str, Enum):
+class Region(str, Enum):  # noqa: UP042
     """Facial region of interest for per-region scoring."""
 
     LEFT_CHEEK = "left_cheek"
@@ -34,7 +37,7 @@ class Region(str, Enum):
 class Patient(SQLModel, table=True):
     """A clinic patient with longitudinal visit history."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     name: str
     gender: Gender = Field(default=Gender.FEMALE)
     birth_date: date
@@ -51,7 +54,7 @@ class Patient(SQLModel, table=True):
 class Visit(SQLModel, table=True):
     """A single clinic visit producing one intake photo + quality report + scores."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     patient_id: int = Field(foreign_key="patient.id", index=True)
     visit_date: date
     photo_path: str = ""
@@ -59,7 +62,7 @@ class Visit(SQLModel, table=True):
     quality_report_json: str = "{}"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    patient: Optional[Patient] = Relationship(back_populates="visits")
+    patient: Patient | None = Relationship(back_populates="visits")
     scores: list["RegionScore"] = Relationship(back_populates="visit")
     treatment: Optional["TreatmentNote"] = Relationship(back_populates="visit")
 
@@ -67,7 +70,7 @@ class Visit(SQLModel, table=True):
 class RegionScore(SQLModel, table=True):
     """Per-region quantitative skin metrics for a single visit."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     visit_id: int = Field(foreign_key="visit.id", index=True)
     region: Region
     pigmentation: float = 0.0
@@ -76,20 +79,20 @@ class RegionScore(SQLModel, table=True):
     pore: float = 0.0
     uniformity: float = 0.0
 
-    visit: Optional[Visit] = Relationship(back_populates="scores")
+    visit: Visit | None = Relationship(back_populates="scores")
 
 
 class TreatmentNote(SQLModel, table=True):
     """AI-generated treatment suggestion (editable by clinician)."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     visit_id: int = Field(foreign_key="visit.id", unique=True, index=True)
     ai_explanation: str = ""
     ai_suggestion: str = ""
     clinician_notes: str = ""
     edited_at: datetime = Field(default_factory=datetime.utcnow)
 
-    visit: Optional[Visit] = Relationship(back_populates="treatment")
+    visit: Visit | None = Relationship(back_populates="treatment")
 
 
 engine = create_engine(DB_URL, echo=False, connect_args={"check_same_thread": False})

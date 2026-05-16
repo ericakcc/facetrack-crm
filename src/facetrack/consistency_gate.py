@@ -146,7 +146,9 @@ class ConsistencyGate:
                 parts.append(f"上下偏 {pitch:+.1f}°")
             if abs(roll) > tol:
                 parts.append(f"頭部傾斜 {roll:+.1f}°")
-            reason = "頭部姿勢超出容差（" + "、".join(parts) + f"，容差 ±{tol:.0f}°），請正對鏡頭重拍。"
+            reason = (
+                "頭部姿勢超出容差（" + "、".join(parts) + f"，容差 ±{tol:.0f}°），請正對鏡頭重拍。"
+            )
         return CheckResult(
             passed=passed,
             measurement={
@@ -186,9 +188,9 @@ class ConsistencyGate:
         passed = not too_dark and not too_bright
         reason = ""
         if too_dark:
-            reason = f"曝光不足（暗部佔比 {low_pct*100:.1f}%，平均亮度 {mean:.0f}/255）。"
+            reason = f"曝光不足（暗部佔比 {low_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
         elif too_bright:
-            reason = f"曝光過度（亮部佔比 {high_pct*100:.1f}%，平均亮度 {mean:.0f}/255）。"
+            reason = f"曝光過度（亮部佔比 {high_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
         return CheckResult(
             passed=passed,
             measurement={
@@ -222,9 +224,7 @@ class ConsistencyGate:
 
     # -------- Color calibration via ArUco gray-card --------
 
-    def _check_and_calibrate_color(
-        self, image_bgr: np.ndarray
-    ) -> tuple[CheckResult, np.ndarray]:
+    def _check_and_calibrate_color(self, image_bgr: np.ndarray) -> tuple[CheckResult, np.ndarray]:
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self._aruco_detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:

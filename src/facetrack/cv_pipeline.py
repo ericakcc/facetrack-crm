@@ -84,10 +84,10 @@ class FacePipeline:
         self._landmarker = mp_vision.FaceLandmarker.create_from_options(options)
 
     def close(self) -> None:
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             self._landmarker.close()
-        except Exception:
-            pass
 
     def process(self, image_bgr: np.ndarray) -> CVPipelineResult:
         """Run alignment + ROI extraction on a BGR image.
@@ -137,9 +137,7 @@ class FacePipeline:
             return CVPipelineResult.no_face()
         return self.process(image_bgr)
 
-    def _detect(
-        self, image_bgr: np.ndarray
-    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    def _detect(self, image_bgr: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None]:
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
         result = self._landmarker.detect(mp_image)
@@ -235,10 +233,10 @@ class FacePipeline:
         is the gate's responsibility (white-balance via gray card).
         """
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
+        lightness, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l_eq = clahe.apply(l)
-        return cv2.cvtColor(cv2.merge((l_eq, a, b)), cv2.COLOR_LAB2BGR)
+        lightness_eq = clahe.apply(lightness)
+        return cv2.cvtColor(cv2.merge((lightness_eq, a, b)), cv2.COLOR_LAB2BGR)
 
 
 _default_pipeline: FacePipeline | None = None

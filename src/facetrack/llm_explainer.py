@@ -75,9 +75,7 @@ _TREATMENT_LIBRARY_ZH: dict[str, str] = {
 }
 
 
-def _identify_top_issues(
-    scores: dict[str, float], top_n: int = 2
-) -> list[tuple[str, float]]:
+def _identify_top_issues(scores: dict[str, float], top_n: int = 2) -> list[tuple[str, float]]:
     """Return the top-N concerning metrics. Uniformity is inverted (low = bad)."""
     concerns: list[tuple[str, float]] = []
     for key, value in scores.items():
@@ -89,9 +87,7 @@ def _identify_top_issues(
     return concerns[:top_n]
 
 
-def _format_delta(
-    scores_now: dict[str, float], scores_prev: dict[str, float] | None
-) -> str:
+def _format_delta(scores_now: dict[str, float], scores_prev: dict[str, float] | None) -> str:
     """Build a short 繁中 sentence summarizing change vs. previous visit."""
     if not scores_prev:
         return "（本次為首次評估，尚無歷史可對照。）"

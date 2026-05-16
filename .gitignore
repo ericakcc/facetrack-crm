@@ -8,7 +8,6 @@ wheels/
 
 # Virtual envs
 .venv/
-.python-version
 
 # IDE
 .vscode/
