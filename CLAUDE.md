@@ -35,6 +35,10 @@ It is the **AI Fund Engineer in Residence Build Challenge** submission.
 | `docs/BUILD_NOTES.md` | What Eric built vs. reused, what broke, debug story | AI Fund panel |
 | `README.md` | Repo front door, quickstart, tech overview | GitHub visitors |
 | **this file** | Agent handoff: status, open work, inconsistencies, non-negotiables | Agents only |
+| `docs/DEMO_STORYBOARD.md` | Scene-by-scene script for the 2–5 min Loom demo | Eric (recording) |
+| `docs/figures/reproducibility.png` | The evidence chart embedded in TDD §3 | AI Fund panel |
+| `scripts/reproducibility_evidence.py` | Regenerates the reproducibility chart | Agents + Eric |
+| `scripts/benchmark.py` | Re-measures end-to-end pipeline latency | Agents + Eric |
 
 ## 4. Architecture in one diagram
 
@@ -75,17 +79,19 @@ Currently open: **none** (as of 2026-05-17). If you find new drift, add a row.
 
 | Required | Status | Notes |
 |---|---|---|
-| Working prototype URL | ❌ Not deployed | Target: Streamlit Community Cloud (free, GitHub-linked) |
-| 2–5 min demo video | ❌ Not recorded | Must visibly show gate **rejecting 2 photos + accepting 1** — depth-area-visible rule |
-| GitHub repo link | ❌ Local `.git` only, not pushed | |
+| Working prototype URL | ❌ Pending Streamlit Cloud deploy | Repo is GitHub-linked; one-click deploy from share.streamlit.io |
+| 2–5 min demo video | ❌ Pending recording | Script ready at `docs/DEMO_STORYBOARD.md` |
+| GitHub repo link | ✅ https://github.com/ericakcc/facetrack-crm (public) | |
 | PRD 1–2 pages | ✅ `docs/PRD.md` | |
-| TDD 1–2 pages | ⚠️ `docs/TDD.md` exists; audit all 4 brief-required sections (imaging / reliability / workflow / consistency) are present | Done on quick read but no formal audit |
+| TDD 1–2 pages | ✅ `docs/TDD.md` — covers imaging / reliability / workflow / consistency; §3 now includes reproducibility-evidence figure | |
 | Build / authorship note | ✅ `docs/BUILD_NOTES.md` | |
 
-**Test coverage gap** (not in brief, but defensible if reviewer reads code):
-- Only `test_app_imports.py` (16 lines) and `test_llm_explainer.py` (62 lines)
-- `scoring.py` and `consistency_gate.py` — the two files that carry the entire "not a wrapper" thesis — have **zero tests**
-- Highest-ROI test: `test_scoring_determinism.py` asserting same input → bit-identical output (this *is* the product claim)
+**Test coverage** (defensible against deep code review):
+- `tests/test_scoring_determinism.py` — 7 tests asserting bit-identical scoring output
+- `tests/test_consistency_gate.py` — 7 tests covering all four gate branches + JSON-serialisability
+- `tests/test_llm_explainer.py` — 4 tests on mock explainer
+- `tests/test_app_imports.py` — smoke test
+- **19 tests pass, fresh-clone-from-GitHub smoke-tested 2026-05-17**
 
 ## 7. Non-negotiables — do not regress
 
