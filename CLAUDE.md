@@ -4,8 +4,14 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-05-17
+> **Last updated**: 2026-05-17 (end of session 1)
 > **Deadline**: 2026-05-19 (default 48hr; brief allows extension with anticipated date)
+>
+> ## ⏭️ Resuming work? Jump to [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
+>
+> **Session 1 ended with everything Claude could do offline complete and pushed.**
+> **4 items remain — all require Eric's hands (browser login, recording, sending).**
+> ETA to submission from a fresh start: **~1.5–2 hours**.
 
 ---
 
@@ -77,23 +83,87 @@ Append, do not delete — the history is itself useful context for future agents
 
 Currently open: **none** (as of 2026-05-17). If you find new drift, add a row.
 
-## 6. Open submission gaps (verbatim from brief's "What To Submit")
+## 6. Pickup checklist for the next session
 
-| Required | Status | Notes |
-|---|---|---|
-| Working prototype URL | ❌ Pending Streamlit Cloud deploy | Repo is GitHub-linked; one-click deploy from share.streamlit.io |
-| 2–5 min demo video | ❌ Pending recording | Script ready at `docs/DEMO_STORYBOARD.md` |
-| GitHub repo link | ✅ https://github.com/ericakcc/facetrack-crm (public) | |
-| PRD 1–2 pages | ✅ `docs/PRD.md` | |
-| TDD 1–2 pages | ✅ `docs/TDD.md` — covers imaging / reliability / workflow / consistency; §3 now includes reproducibility-evidence figure | |
-| Build / authorship note | ✅ `docs/BUILD_NOTES.md` | |
+Status at session-1 end (2026-05-17):
 
-**Test coverage** (defensible against deep code review):
-- `tests/test_scoring_determinism.py` — 7 tests asserting bit-identical scoring output
-- `tests/test_consistency_gate.py` — 7 tests covering all four gate branches + JSON-serialisability
-- `tests/test_llm_explainer.py` — 4 tests on mock explainer
-- `tests/test_app_imports.py` — smoke test
-- **19 tests pass, fresh-clone-from-GitHub smoke-tested 2026-05-17**
+| Required (verbatim from brief) | Status |
+|---|---|
+| Working prototype URL | ❌ Pending Streamlit Cloud deploy |
+| 2–5 min demo video | ❌ Pending recording |
+| GitHub repo link | ✅ https://github.com/ericakcc/facetrack-crm (public) |
+| PRD 1–2 pages | ✅ `docs/PRD.md` |
+| TDD 1–2 pages | ✅ `docs/TDD.md` (incl. reproducibility figure §3, latency table §6, LIMITATIONS link §7) |
+| Build / authorship note | ✅ `docs/BUILD_NOTES.md` |
+| Bonus: failure-mode catalogue | ✅ `docs/LIMITATIONS.md` (6 cases × Phase-2 fixes) |
+| Bonus: demo storyboard | ✅ `docs/DEMO_STORYBOARD.md` |
+| Bonus: submission email draft | ✅ `docs/SUBMISSION_EMAIL.md` (fill the 2 URLs) |
+
+**Test coverage**: 19 tests pass; fresh-clone-from-GitHub smoke-tested.
+
+### Remaining work (all manual — agent cannot do these)
+
+#### 1. Deploy to Streamlit Community Cloud (~10 min) ← do this first
+
+```
+1. Open https://share.streamlit.io  (sign in with GitHub)
+2. Click "Create app" → "Deploy a public app from GitHub"
+3. Repository:   ericakcc/facetrack-crm
+   Branch:       main
+   Main file:    app.py
+4. (Optional) Click "Advanced settings" → Secrets, paste:
+       ANTHROPIC_API_KEY = "sk-ant-..."
+   If no key, leave blank — app falls back to MockExplainer automatically.
+5. Click Deploy. First boot ~3-5 min (installs ~80 deps incl. MediaPipe).
+6. Note the URL — should look like https://facetrack-crm-XXXX.streamlit.app/
+```
+
+**Smoke test on the deployed URL** (incognito tab):
+- Sidebar lists 3 seed patients (林雅婷 / 陳怡君 / 王思婷)
+- 📈 縱向追蹤 renders radar + line chart
+- 📸 新增就診 shows two tabs: 📷 即時拍照 / 📁 上傳照片
+- Upload `data/test_images/test_face_1.jpg` → gate rejects (underexposed)
+
+**If deploy fails**: most likely cause is the 3.6 MB `face_landmarker.task` not making it into the deploy. It IS committed (verify with `git ls-files src/facetrack/models/`). If still failing, check Streamlit Cloud logs for `FileNotFoundError`.
+
+#### 2. Record demo video (~1 hr including retakes)
+
+```
+1. Open the deployed URL in a fresh Chrome window, zoom to 110%
+2. Pre-download data/test_images/test_face_{1,2,3}.jpg locally for drag-and-drop
+3. (Optional) Have ONE more photo ready for Scene 6 "失敗 case":
+       - a selfie with a mask, OR
+       - a heavily makeup photo, OR
+       - a photo with sunglasses
+4. Follow docs/DEMO_STORYBOARD.md scene-by-scene (7 scenes, target 3-4 min)
+5. Tool: Loom browser recorder (includes webcam bubble) OR OBS for local file
+6. Voiceover in 繁體中文
+```
+
+**Scene 3 is the most important** — that's where the Photo-Consistency Gate is shown
+rejecting bad photos, which is the brief's "depth area visible in product evidence" rule.
+
+#### 3. Upload to Loom and get a public link (~10 min)
+
+- Upload the recording
+- Sharing → set to "Anyone with the link can view" (NOT workspace-only)
+- Test the URL in an incognito window before pasting it anywhere
+
+#### 4. Send submission email (~5 min)
+
+- Open `docs/SUBMISSION_EMAIL.md`
+- Replace `[STREAMLIT_CLOUD_URL]` and `[LOOM_URL]`
+- Send to `mike@aifund.ai`, subject `FaceTrack CRM — Build Challenge submission`
+
+### Decision flags for the next session
+
+- **Extension to 2026-05-20?** Brief explicitly allows. Worth doing only if something blocks deploy/recording — otherwise default deadline 2026-05-19 is fine.
+- **Anthropic API key for live LLM in demo?** Optional. If obtained between sessions, set as a Streamlit Cloud secret (step 4 above) and re-deploy — no code change needed.
+
+### Decisions taken in session 1 (do NOT re-litigate)
+
+- **Skip clinic outreach / customer development.** AI Fund's operating model (per Eric's firsthand attendance at the Beauty Clinic OS breakfast) puts ideation + market validation on AI Fund's internal team; the EIR is filtered on technical execution. See memory `project_aifund_facetrack.md` "Operating model" section.
+- **Simulated stochastic baseline in reproducibility chart, not real Vision-LLM.** No API key available in session 1; the chart caption is honest about this; the qualitative argument doesn't depend on the baseline being measured.
 
 ## 7. Non-negotiables — do not regress
 
