@@ -26,6 +26,11 @@ data/photos/*.jpg
 data/photos/*.png
 data/photos/*.jpeg
 !data/photos/.gitkeep
+# Real-person test photos — local-only per CLAUDE.md §7 ("No real-person images in the repo").
+# CC0 test_face_{1,2,3}.jpg are exempt and stay tracked.
+data/test_images/self_*.jpg
+data/test_images/self_*.png
+data/test_images/self_*.jpeg
 
 # Streamlit
 .streamlit/secrets.toml
