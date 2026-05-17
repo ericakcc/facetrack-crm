@@ -49,6 +49,11 @@ class CVPipelineResult:
     transformation_matrix: np.ndarray | None = None  # 4x4 facial transform
     rois: dict[Region, np.ndarray] = field(default_factory=dict)
     roi_bboxes: dict[Region, tuple[int, int, int, int]] = field(default_factory=dict)
+    # Ordered polygon points (in aligned-image pixel coords) per region.
+    # The polygon defines the actual measurement area; the bbox is the tight
+    # axis-aligned crop, and roi_masks is the polygon rasterized into that crop.
+    roi_polygons: dict[Region, np.ndarray] = field(default_factory=dict)
+    roi_masks: dict[Region, np.ndarray] = field(default_factory=dict)
     face_detected: bool = True
 
     @classmethod
@@ -109,16 +114,29 @@ class FacePipeline:
 
         rois: dict[Region, np.ndarray] = {}
         bboxes: dict[Region, tuple[int, int, int, int]] = {}
+        polygons: dict[Region, np.ndarray] = {}
+        masks: dict[Region, np.ndarray] = {}
+        img_h, img_w = aligned.shape[:2]
         for region in Region:
-            bbox = self._region_bbox(aligned_landmarks, region, aligned.shape[1], aligned.shape[0])
+            polygon = self._region_polygon(aligned_landmarks, region)
+            if polygon is None or len(polygon) < 3:
+                continue
+            bbox = self._polygon_bbox(polygon, img_w, img_h)
             if bbox is None:
                 continue
             x, y, w, h = bbox
             crop = aligned[y : y + h, x : x + w].copy()
             if crop.size == 0:
                 continue
+            from facetrack.visualization import polygon_mask
+
+            mask = polygon_mask(polygon, aligned.shape, bbox=bbox)
+            if mask.sum() == 0:
+                continue
             rois[region] = self._normalize_lighting(crop)
             bboxes[region] = bbox
+            polygons[region] = polygon
+            masks[region] = mask
 
         return CVPipelineResult(
             aligned_image=aligned,
@@ -126,6 +144,8 @@ class FacePipeline:
             transformation_matrix=transform,
             rois=rois,
             roi_bboxes=bboxes,
+            roi_polygons=polygons,
+            roi_masks=masks,
             face_detected=True,
         )
 
@@ -170,6 +190,58 @@ class FacePipeline:
         landmarks_homo = np.hstack([landmarks_px, ones])
         aligned_landmarks = landmarks_homo @ rotation_matrix.T
         return aligned, aligned_landmarks.astype(np.float32)
+
+    def _region_polygon(
+        self,
+        landmarks: np.ndarray,
+        region: Region,
+    ) -> np.ndarray | None:
+        """Return ordered polygon points (in aligned-image px coords) for the region.
+
+        Each Region maps to a hand-curated ordered tuple of MediaPipe Face Mesh
+        indices that trace the anatomical boundary of that area. Out-of-range
+        indices are dropped silently.
+        """
+        from facetrack.visualization import (
+            CHIN_POLYGON,
+            FOREHEAD_POLYGON,
+            LEFT_CHEEK_POLYGON,
+            RIGHT_CHEEK_POLYGON,
+        )
+
+        polygon_indices: dict[Region, tuple[int, ...]] = {
+            Region.FOREHEAD: FOREHEAD_POLYGON,
+            Region.LEFT_CHEEK: LEFT_CHEEK_POLYGON,
+            Region.RIGHT_CHEEK: RIGHT_CHEEK_POLYGON,
+            Region.CHIN: CHIN_POLYGON,
+        }
+        indices = polygon_indices.get(region)
+        if not indices:
+            return None
+        n = len(landmarks)
+        valid = [i for i in indices if i < n]
+        if len(valid) < 3:
+            return None
+        return landmarks[valid].astype(np.float32)
+
+    def _polygon_bbox(
+        self,
+        polygon: np.ndarray,
+        img_w: int,
+        img_h: int,
+    ) -> tuple[int, int, int, int] | None:
+        """Tight bounding box of a polygon, clipped to image extents."""
+        xs = polygon[:, 0]
+        ys = polygon[:, 1]
+        x1 = max(0, int(np.floor(xs.min())))
+        y1 = max(0, int(np.floor(ys.min())))
+        x2 = min(img_w, int(np.ceil(xs.max())))
+        y2 = min(img_h, int(np.ceil(ys.max())))
+        w = x2 - x1
+        h = y2 - y1
+        if w <= 4 or h <= 4:
+            return None
+        return (x1, y1, w, h)
 
     def _region_bbox(
         self,

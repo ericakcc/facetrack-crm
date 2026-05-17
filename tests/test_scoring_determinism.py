@@ -45,6 +45,30 @@ def _synthetic_skin_patch(seed: int = 0, size: int = 256) -> np.ndarray:
     return base
 
 
+def test_scoring_with_mask_differs_from_unmasked() -> None:
+    """When a small ROI mask is provided, ratio metrics must reflect only the
+    masked area — and uniformity/erythema use only masked pixels for their stats.
+
+    Ensures the polygon-mask plumbing actually changes the result (the mask
+    isn't being silently dropped). Uses a deliberately asymmetric mask so the
+    masked statistics cannot accidentally equal the unmasked stats.
+    """
+    img = _synthetic_skin_patch(seed=4)
+    # Mask covers only the upper-left quadrant.
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    mask[: img.shape[0] // 2, : img.shape[1] // 2] = 255
+
+    unmasked = score_region(img)
+    masked = score_region(img, mask)
+    # At least one metric must differ — synthetic spots are seeded randomly so
+    # the two regions cannot have identical pigmentation/erythema/etc.
+    any_diff = any(
+        getattr(unmasked, m) != getattr(masked, m)
+        for m in ("pigmentation", "erythema", "wrinkle", "pore", "uniformity")
+    )
+    assert any_diff, "Mask was ignored — masked score equals unmasked score on every metric."
+
+
 def test_raw_metrics_are_bit_identical_across_calls() -> None:
     """Every raw scalar must be float-equal across two invocations on the same input."""
     img = _synthetic_skin_patch(seed=1)

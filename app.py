@@ -327,8 +327,9 @@ def page_intake(patient: Patient) -> None:
             format_func=lambda key: "（無）" if key == "none" else f"{METRIC_LABELS_ZH[key]}",
             key=f"heatmap_{patient.id}",
         )
-        show_landmarks = st.checkbox("顯示 478 地標點", value=False, key=f"lm_{patient.id}")
-        show_roi_boxes = st.checkbox("顯示 ROI 框", value=False, key=f"roi_{patient.id}")
+        show_landmarks = st.checkbox("顯示 478 地標點（分色）", value=False, key=f"lm_{patient.id}")
+        show_roi_boxes = st.checkbox("顯示 ROI 解剖區域", value=False, key=f"roi_{patient.id}")
+        show_tessellation = st.checkbox("顯示 mesh 線稿", value=False, key=f"tess_{patient.id}")
         st.caption(
             "熱力圖中：紅 = 訊號強（該指標反應大）；藍 = 訊號弱。"
             "色素沉澱看 black-hat、細紋看 Sobel、毛孔看 LoG、泛紅看 LAB a*、"
@@ -338,10 +339,12 @@ def page_intake(patient: Patient) -> None:
     composed_bgr = compose_intake_view(
         pipeline_result.aligned_image,
         pipeline_result.landmarks_px,
-        pipeline_result.roi_bboxes,
+        pipeline_result.roi_polygons,
+        roi_bboxes=pipeline_result.roi_bboxes,
         heatmap_metric=None if heatmap_option == "none" else heatmap_option,
         show_landmarks=show_landmarks,
         show_roi=show_roi_boxes,
+        show_tessellation=show_tessellation,
     )
     composed_caption = (
         "對齊後（已套用熱力圖：" + METRIC_LABELS_ZH[heatmap_option] + "）"
@@ -372,7 +375,7 @@ def page_intake(patient: Patient) -> None:
             return
 
     st.subheader("③ 量化分數")
-    region_scores = score_visit(pipeline_result.rois)
+    region_scores = score_visit(pipeline_result.rois, pipeline_result.roi_masks)
     agg = aggregate_face_scores(region_scores)
     score_cols = st.columns(5)
     for col, m in zip(score_cols, METRICS, strict=False):

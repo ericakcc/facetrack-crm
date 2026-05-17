@@ -15,9 +15,12 @@ from facetrack.visualization import (
     compose_intake_view,
     draw_landmarks,
     draw_roi_boxes,
+    draw_roi_polygons,
     face_mask_from_landmarks,
     metric_response_map,
     overlay_heatmap,
+    polygon_mask,
+    skin_mask_from_landmarks,
 )
 
 
@@ -116,11 +119,78 @@ def test_overlay_heatmap_respects_face_mask() -> None:
     assert not np.array_equal(composed[160:190, 160:190], image[160:190, 160:190])
 
 
+def test_skin_mask_shape_dtype() -> None:
+    image = _fake_image()
+    landmarks = _fake_landmarks(image.shape[:2])
+    mask = skin_mask_from_landmarks(landmarks, image.shape)
+    assert mask.shape == image.shape[:2]
+    assert mask.dtype == np.float32
+    assert mask.min() >= 0.0 and mask.max() <= 1.0
+
+
+def test_skin_mask_is_subset_of_face_mask() -> None:
+    """Skin region must be contained in the face oval region (with feather tolerance)."""
+    image = _fake_image()
+    landmarks = _fake_landmarks(image.shape[:2])
+    face = face_mask_from_landmarks(landmarks, image.shape)
+    skin = skin_mask_from_landmarks(landmarks, image.shape)
+    # Skin pixels can only appear where the face oval already has signal.
+    # Allow a small tolerance because both masks are independently Gaussian-feathered.
+    assert (skin <= face + 1e-3).all()
+
+
+def test_skin_mask_empty_landmarks_safe() -> None:
+    image = _fake_image()
+    mask = skin_mask_from_landmarks(np.zeros((0, 2), dtype=np.float32), image.shape)
+    assert mask.shape == image.shape[:2]
+    assert mask.dtype == np.float32
+    assert (mask == 0.0).all()
+
+
+def test_polygon_mask_fills_correctly() -> None:
+    """A triangle covering the centre must yield a non-empty mask there."""
+    triangle = np.array([[20, 20], [200, 20], [110, 200]], dtype=np.float32)
+    mask = polygon_mask(triangle, (256, 256))
+    assert mask.shape == (256, 256)
+    assert mask.dtype == np.uint8
+    # Interior pixel is inside the triangle.
+    assert mask[100, 100] == 255
+    # Corner is outside.
+    assert mask[0, 0] == 0
+
+
+def test_polygon_mask_bbox_translation() -> None:
+    """bbox parameter should return a mask sized to (h, w) of the bbox."""
+    triangle = np.array([[20, 20], [200, 20], [110, 200]], dtype=np.float32)
+    mask = polygon_mask(triangle, (256, 256), bbox=(15, 15, 195, 195))
+    assert mask.shape == (195, 195)
+    # Bbox-local centre of triangle should still be inside.
+    assert mask[85, 85] == 255
+
+
+def test_draw_roi_polygons_preserves_shape() -> None:
+    image = _fake_image()
+    # Synthetic polygons (triangles) covering different quadrants.
+    polygons = {
+        Region.FOREHEAD: np.array([[80, 30], [180, 30], [128, 100]], dtype=np.float32),
+        Region.LEFT_CHEEK: np.array([[150, 130], [220, 140], [200, 200]], dtype=np.float32),
+        Region.RIGHT_CHEEK: np.array([[40, 130], [110, 140], [60, 200]], dtype=np.float32),
+        Region.CHIN: np.array([[110, 210], [150, 210], [130, 245]], dtype=np.float32),
+    }
+    out = draw_roi_polygons(image, polygons)
+    assert out.shape == image.shape
+    assert out.dtype == np.uint8
+    assert not np.array_equal(out, image)
+
+
 def test_compose_intake_view_runs_with_heatmap() -> None:
     image = _fake_image()
     landmarks = _fake_landmarks(image.shape[:2])
     boxes = _fake_bboxes(image.shape[:2])
-    out = compose_intake_view(image, landmarks, boxes, heatmap_metric="pigmentation")
+    # Pass bboxes via the legacy kwarg; new signature prefers roi_polygons.
+    out = compose_intake_view(
+        image, landmarks, None, roi_bboxes=boxes, heatmap_metric="pigmentation"
+    )
     assert out.shape == image.shape
     assert out.dtype == np.uint8
 
@@ -132,7 +202,8 @@ def test_compose_intake_view_no_heatmap_no_overlays() -> None:
     out = compose_intake_view(
         image,
         landmarks,
-        boxes,
+        None,
+        roi_bboxes=boxes,
         heatmap_metric=None,
         show_landmarks=False,
         show_roi=False,
