@@ -1,6 +1,7 @@
 # FaceTrack CRM
 
 > AI-native CRM and clinical support system for Taiwan medical aesthetic / beauty clinics.
+> **MVP 追蹤皮秒雷射淡斑療程**；同一套架構為擴展至其他醫美術後（肝斑、痘疤、紅血絲）而設計。
 > **AI Fund Engineer in Residence — Build Challenge submission.**
 
 ## What it does
@@ -9,7 +10,8 @@ A standardized facial-photo intake flow that produces **quantified, reproducible
 skin profiles, supports longitudinal comparison across visits, and powers a
 clinician-facing treatment-planning workflow — built around a **Photo-Consistency
 Gate** that rejects low-quality intakes before they contaminate the patient's
-longitudinal record.
+longitudinal record. **本次 build challenge 提交版本以皮秒雷射淡斑療程追蹤為示範**
+（4–6 次療程、色素沉澱為主訊號）；引擎本身是 procedure-agnostic（見 TDD §3）。
 
 ## The product thesis (read this first)
 
@@ -123,8 +125,9 @@ facetrack-crm/
 
 The 2-5 minute demo should hit these beats in order:
 
-1. **Open the app**, select 林雅婷, show the **縱向追蹤** radar + line chart
-   — the existing seed data demonstrates a downward pigmentation trend.
+1. **Open the app**, select 林雅婷 (皮秒雷射 session 3 患者), show the
+   **縱向追蹤** radar + line chart — the existing seed data demonstrates a
+   downward pigmentation trend across her course.
 2. Switch to **新增就診**. Upload `data/test_images/test_face_1.jpg`. The
    Photo-Consistency Gate **rejects** it (underexposed) with a 繁中 reason.
    Upload `test_face_3.jpg`. **Rejected** (overexposed).

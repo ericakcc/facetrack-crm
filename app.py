@@ -29,6 +29,7 @@ from facetrack.db import (
 from facetrack.llm_explainer import get_explainer
 from facetrack.scoring import aggregate_face_scores, score_visit
 from facetrack.seed import seed_database
+from facetrack.visualization import compose_intake_view
 
 METRICS = ("pigmentation", "erythema", "wrinkle", "pore", "uniformity")
 METRIC_LABELS_ZH = {
@@ -266,7 +267,9 @@ def _render_quality_report(report: QualityReport) -> None:
 
 def page_intake(patient: Patient) -> None:
     st.header(f"📸 新增就診｜{patient.name}")
-    st.caption("使用相機即時拍攝、或上傳既有照片。系統會先執行『影像一致性檢查』，通過後才計算分數。")
+    st.caption(
+        "使用相機即時拍攝、或上傳既有照片。系統會先執行『影像一致性檢查』，通過後才計算分數。"
+    )
 
     source_tabs = st.tabs(["📷 即時拍照", "📁 上傳照片"])
     with source_tabs[0]:
@@ -305,13 +308,62 @@ def page_intake(patient: Patient) -> None:
         st.error("未偵測到臉部，已中止後續處理。")
         return
 
-    st.subheader("② 對齊與 ROI 擷取")
-    cols = st.columns([2, 1, 1, 1, 1])
-    cols[0].image(cv2.cvtColor(pipeline_result.aligned_image, cv2.COLOR_BGR2RGB), caption="對齊後")
-    for col, region in zip(cols[1:], Region, strict=False):
-        roi = pipeline_result.rois.get(region)
-        if roi is not None:
-            col.image(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB), caption=region_label_zh(region))
+    st.subheader("② 對齊與色素熱力圖")
+    st.caption(
+        "**皮秒雷射療程追蹤模式**｜預設顯示色素沉澱熱力圖。"
+        "可下拉切換其他指標（細紋／毛孔／泛紅／均勻度）、開啟 478 地標點或 ROI 框。"
+    )
+    st.caption(
+        "熱力圖直接呈現分數的中間訊號 — black-hat 形態學在哪裡反應強，色素分數就是怎麼算出來的。"
+        "這也是 TDD §3 explainability 承諾的兌現。"
+    )
+
+    viz_cols = st.columns([3, 1])
+    with viz_cols[1]:
+        heatmap_option = st.selectbox(
+            "熱力圖",
+            options=["none", *METRICS],
+            index=1,  # default = "pigmentation" — primary metric for laser-pigmentation tracking
+            format_func=lambda key: "（無）" if key == "none" else f"{METRIC_LABELS_ZH[key]}",
+            key=f"heatmap_{patient.id}",
+        )
+        show_landmarks = st.checkbox("顯示 478 地標點", value=False, key=f"lm_{patient.id}")
+        show_roi_boxes = st.checkbox("顯示 ROI 框", value=False, key=f"roi_{patient.id}")
+        st.caption(
+            "熱力圖中：紅 = 訊號強（該指標反應大）；藍 = 訊號弱。"
+            "色素沉澱看 black-hat、細紋看 Sobel、毛孔看 LoG、泛紅看 LAB a*、"
+            "均勻度看 L* 局部標準差。"
+        )
+
+    composed_bgr = compose_intake_view(
+        pipeline_result.aligned_image,
+        pipeline_result.landmarks_px,
+        pipeline_result.roi_bboxes,
+        heatmap_metric=None if heatmap_option == "none" else heatmap_option,
+        show_landmarks=show_landmarks,
+        show_roi=show_roi_boxes,
+    )
+    composed_caption = (
+        "對齊後（已套用熱力圖：" + METRIC_LABELS_ZH[heatmap_option] + "）"
+        if heatmap_option != "none"
+        else "對齊後（無熱力圖）"
+    )
+    viz_cols[0].image(
+        cv2.cvtColor(composed_bgr, cv2.COLOR_BGR2RGB),
+        caption=composed_caption,
+        use_container_width=True,
+    )
+
+    with st.expander("各 ROI 局部影像（CLAHE 平衡後）", expanded=False):
+        roi_cols = st.columns(4)
+        for col, region in zip(roi_cols, Region, strict=False):
+            roi = pipeline_result.rois.get(region)
+            if roi is not None:
+                col.image(
+                    cv2.cvtColor(roi, cv2.COLOR_BGR2RGB),
+                    caption=region_label_zh(region),
+                    use_container_width=True,
+                )
 
     if not report.overall_passed:
         st.warning("此照片未通過一致性檢查，可繼續評分，但不會用於縱向追蹤基準。")

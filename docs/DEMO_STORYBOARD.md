@@ -23,8 +23,10 @@ with the 繁中 reason visible. Everything else is supporting evidence.
 **Visual**: Browser at the deployed URL. Sidebar showing 3 seed patients.
 
 **Voiceover**:
-> 「這是 FaceTrack CRM，給台灣醫美診所櫃台用的智能拍照系統。它解決一個被忽略的問題：
-> 同一個病患在不同次回診的照片，因為角度、光線、相機都不一樣，**根本沒辦法做縱向比較**。
+> 「這是 FaceTrack CRM，給台灣醫美診所櫃台用的智能拍照系統。
+> 我用台灣醫美最大宗的療程 — **皮秒雷射淡斑** — 作為 MVP 的追蹤對象。
+> 它解決一個被忽略的問題：同一個病患在不同次回診的照片，因為角度、光線、相機都不一樣，
+> **根本沒辦法做縱向比較**，所以櫃台跟醫師對『session 2 有沒有效』都只能用眼睛猜。
 > 我們用一個確定性的 CV 評分引擎 + 一個影像品管 gate 來解決這個問題。」
 
 ---
@@ -95,7 +97,10 @@ with the 繁中 reason visible. Everything else is supporting evidence.
 
 **Voiceover**:
 > 「回到縱向追蹤頁，新加入的這次就診已經寫進趨勢圖，**而且因為它通過 gate，
-> 可以放心地跟前面三次直接比較**。這就是整個產品的閉環。」
+> 可以放心地跟前面三次直接比較**。這就是整個產品的閉環。
+> 下一步，如果要從皮秒淡斑展開到痘疤、肝斑、紅血絲 — **引擎不變、gate 不變、
+> Streamlit UI 不變，只是註冊一個新的 metric function**。這套追蹤架構是為這個
+> 擴展路徑設計的。」
 
 ---
 

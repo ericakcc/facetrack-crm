@@ -110,7 +110,21 @@ without other changes.
 **Explainability.** The score formula is the explanation. A physician
 asking "why is the pigmentation score 7.2 ?" can be answered with a
 heatmap of the black-hat response — the same intermediate the score is
-computed from.
+computed from. The intake page surfaces this heatmap directly above the
+score card (`src/facetrack/visualization.py:metric_response_map`); what
+the clinician sees is what the scorer computed on.
+
+**Extensibility — why this is procedure-agnostic.** The five scoring
+functions in `scoring.py` are independent module-level functions sharing
+one signature (`bgr → float`), aggregated by `score_region`. Adding a new
+procedure-specific metric — volume change for filler, vascularity index
+for rosacea — is a new function plus one entry in the aggregator. No
+model retraining, no pipeline change, no schema migration (`RegionScore`
+columns are float and procedure-neutral). The MVP elevates pigmentation
+as the hero metric for 皮秒雷射淡斑追蹤; the other four are scaffolding
+for the next procedures (肝斑、痘疤、紅血絲). This is the property that
+makes the "one wedge, then the next 醫美 procedure" path in PRD §5 a
+plug-in operation, not a rewrite.
 
 ## 4. Photo-consistency controls — the depth area
 
