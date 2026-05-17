@@ -107,7 +107,10 @@ facetrack-crm/
 ├── docs/
 │   ├── PRD.md                      # Product requirements (1-2 pages)
 │   ├── TDD.md                      # Technical design (1-2 pages)
-│   └── BUILD_NOTES.md              # Authorship / debugging note
+│   ├── BUILD_NOTES.md              # Authorship / debugging note
+│   ├── LIMITATIONS.md              # Honest failure-mode catalogue + Phase-2 plan
+│   ├── DEMO_STORYBOARD.md          # Scene-by-scene demo recording script
+│   └── figures/reproducibility.png # Determinism evidence (embedded in TDD §3)
 ├── scripts/
 │   └── generate_demo_photos.py     # Nano Banana Pro longitudinal photo gen
 ├── tests/                          # pytest suite (mock explainer, app imports)

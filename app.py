@@ -266,14 +266,28 @@ def _render_quality_report(report: QualityReport) -> None:
 
 def page_intake(patient: Patient) -> None:
     st.header(f"📸 新增就診｜{patient.name}")
-    st.caption("上傳一張正面臉部照片。系統會先執行『影像一致性檢查』，通過後才計算分數。")
+    st.caption("使用相機即時拍攝、或上傳既有照片。系統會先執行『影像一致性檢查』，通過後才計算分數。")
 
-    uploaded = st.file_uploader("選擇照片（JPG / PNG）", type=["jpg", "jpeg", "png"])
+    source_tabs = st.tabs(["📷 即時拍照", "📁 上傳照片"])
+    with source_tabs[0]:
+        camera_photo = st.camera_input(
+            "請對準鏡頭，按下方按鈕拍攝",
+            help="與真實診所動線一致：櫃台拍攝後系統即時把關，不通過會立刻退回重拍。",
+            key=f"camera_{patient.id}",
+        )
+    with source_tabs[1]:
+        uploaded_file = st.file_uploader(
+            "選擇照片（JPG / PNG）",
+            type=["jpg", "jpeg", "png"],
+            key=f"uploader_{patient.id}",
+        )
+
+    uploaded = camera_photo or uploaded_file
     if not uploaded:
-        st.info("尚未上傳照片。建議拍攝時：正面、均勻光線、距離 30–50 公分、無濾鏡。")
+        st.info("尚未取得照片。建議拍攝條件：正面、均勻光線、距離 30–50 公分、無濾鏡。")
         return
 
-    file_bytes = np.frombuffer(uploaded.read(), dtype=np.uint8)
+    file_bytes = np.frombuffer(uploaded.getvalue(), dtype=np.uint8)
     image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if image_bgr is None:
         st.error("無法解讀此圖檔。")

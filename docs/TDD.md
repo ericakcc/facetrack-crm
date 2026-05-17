@@ -95,13 +95,17 @@ face 20 times (rotation ≤1.5°, exposure ±4 %, JPEG re-encode at quality
 ![reproducibility evidence](figures/reproducibility.png)
 
 The left panel is our CV scoring; the right is a stochastic baseline
-calibrated to typical Vision-LLM rating variance (σ ≈ 1.0 on a 0–10
-scale, what Claude / GPT-4o would plausibly produce on the same task —
-simulated here because the brief turnaround precluded the API spend, but
-the qualitative gap is what matters). Averaged across all five metrics,
-**σ̄(ours) ≈ 0.19 vs σ̄(stochastic) ≈ 0.58 — a 3× tighter band**, which
-is the difference between a longitudinal chart you can act on and one
-you cannot.
+at σ = 1.0 on a 0–10 scale — simulated rather than measured against a
+live Vision-LLM endpoint. The *qualitative* argument is structural and
+does not depend on the sample: any LLM scorer has nonzero output
+variance by construction, whereas the CV path has *zero* variance on
+the same input and bounded variance on perturbed input. Averaged
+across all five metrics, **σ̄(ours) ≈ 0.19 vs σ̄(stochastic) ≈ 0.58 —
+a 3× tighter band**, which is the difference between a longitudinal
+chart you can act on and one you cannot. The script is parameterised:
+setting `ANTHROPIC_API_KEY` and swapping the baseline generator for a
+Claude vision call regenerates the right panel against real data
+without other changes.
 
 **Explainability.** The score formula is the explanation. A physician
 asking "why is the pigmentation score 7.2 ?" can be answered with a
@@ -176,16 +180,22 @@ treatment note.
 
 ## 7. Known limitations / future hardening
 
+A summary; the full failure-mode catalogue with concrete Phase-2 plans is in
+[`docs/LIMITATIONS.md`](./LIMITATIONS.md).
+
 1. **Empirical scoring ranges** are calibrated on three reference photos; a
    real pilot would re-fit on ~200 clinic images per Fitzpatrick skin type.
 2. **No identity confirmation** — the system trusts that the receptionist
-   selected the right patient before upload. Phase 2 should add face-embedding
+   selected the right patient before upload. Phase 2: face-embedding
    verification against the patient's first-visit photo.
 3. **ArUco card adoption is voluntary**, which means color calibration is
-   best-effort. Phase 2 introduces a small printable card distributed with
-   every onboarding pack and a marker-required clinic setting.
+   best-effort. Phase 2: small printable card distributed with every
+   onboarding pack + a marker-required clinic setting.
 4. **No HIPAA / PIPL story** — patient photos are in clear on disk. Phase 2
    needs at-rest encryption and a deletion API.
+5. **Skin-surface visibility is not validated** — heavy makeup, partial
+   occlusion, and smartphone beauty filters can pass every gate check and
+   still produce misleading scores. See `LIMITATIONS.md` §1, §2, §5.
 
 ## 8. What was reused vs. built
 

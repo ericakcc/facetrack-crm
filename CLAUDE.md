@@ -39,6 +39,8 @@ It is the **AI Fund Engineer in Residence Build Challenge** submission.
 | `docs/figures/reproducibility.png` | The evidence chart embedded in TDD §3 | AI Fund panel |
 | `scripts/reproducibility_evidence.py` | Regenerates the reproducibility chart | Agents + Eric |
 | `scripts/benchmark.py` | Re-measures end-to-end pipeline latency | Agents + Eric |
+| `docs/LIMITATIONS.md` | 6 failure modes + concrete Phase-2 mitigations | AI Fund panel |
+| `docs/SUBMISSION_EMAIL.md` | Fill-in-the-blanks final email to Mike | Eric |
 
 ## 4. Architecture in one diagram
 
