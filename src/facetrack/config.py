@@ -22,6 +22,13 @@ DB_URL: str = f"sqlite:///{DB_PATH}"
 ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 
+# Gemini backend. Set GEMINI_API_KEY in .env to enable. When both Anthropic
+# and Gemini keys are configured, the factory in llm_explainer prefers
+# whichever LLM_BACKEND is explicitly set, else Anthropic by default.
+GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+LLM_BACKEND: str | None = os.getenv("LLM_BACKEND")  # 'anthropic' | 'gemini' | None=auto
+
 # Originally tuned for clinic-grade DSLR photos. Loosened after switching to
 # live webcam capture, which has lower native resolution and rarely produces
 # Laplacian variances > 100 even on well-lit faces — anything stricter rejects
