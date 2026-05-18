@@ -13,6 +13,7 @@ def test_app_imports_and_module_objects_exist() -> None:
     module = importlib.import_module("app")
 
     for fn_name in (
+        "page_patients",
         "page_overview",
         "page_intake",
         "page_history",

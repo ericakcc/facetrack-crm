@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.102.0",
+    "google-genai>=2.4.0",
     "loguru>=0.7.3",
     "mediapipe>=0.10.35",
     "numpy>=2.4.5",

@@ -44,6 +44,7 @@ class Patient(SQLModel, table=True):
     birth_date: date
     phone: str = ""
     notes: str = ""
+    is_active: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     visits: list["Visit"] = Relationship(
@@ -112,6 +113,7 @@ def init_db() -> None:
     file already exists (SQLite zero-downtime migration for nullable columns)."""
     SQLModel.metadata.create_all(engine)
     _migrate_add_visit_side_photo_columns()
+    _migrate_add_patient_is_active_column()
 
 
 def _migrate_add_visit_side_photo_columns() -> None:
@@ -126,6 +128,21 @@ def _migrate_add_visit_side_photo_columns() -> None:
             conn.execute(text("ALTER TABLE visit ADD COLUMN photo_left_path TEXT"))
         if "photo_right_path" not in cols:
             conn.execute(text("ALTER TABLE visit ADD COLUMN photo_right_path TEXT"))
+
+
+def _migrate_add_patient_is_active_column() -> None:
+    """Backfill `is_active` on pre-existing patient rows.
+
+    `DEFAULT 1 NOT NULL` is required: SQLite's ADD COLUMN ... NOT NULL refuses
+    to run without a default, and this ensures every existing seed patient
+    becomes active automatically.
+    """
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info('patient')"))}
+        if "is_active" not in cols:
+            conn.execute(
+                text("ALTER TABLE patient ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL")
+            )
 
 
 def get_session() -> Session:
