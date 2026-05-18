@@ -258,37 +258,79 @@ FOREHEAD_POLYGON: tuple[int, ...] = (
 LEFT_CHEEK_POLYGON: tuple[int, ...] = (
     # Subject's left cheek = image right side. Ordered clockwise on the image.
     # Top edge (under-eye lid), inner (near nose) → outer (toward temple):
-    453, 452, 451, 450, 449, 448, 261, 340,
+    453,
+    452,
+    451,
+    450,
+    449,
+    448,
+    261,
+    340,
     # Outer-lateral face oval going down to mouth-level (stop before jaw):
-    323, 361, 288,
+    323,
+    361,
+    288,
     # Inner-lower (mouth corner):
     291,
     # Nasolabial fold going back up to start:
-    436, 426, 327, 358,
+    436,
+    426,
+    327,
+    358,
 )
 
 RIGHT_CHEEK_POLYGON: tuple[int, ...] = (
     # Subject's right cheek = image left side. Ordered clockwise on the image.
     # Top edge (under-eye lid), inner (near nose) → outer (toward temple):
-    233, 232, 231, 230, 229, 228, 31, 111,
+    233,
+    232,
+    231,
+    230,
+    229,
+    228,
+    31,
+    111,
     # Outer-lateral face oval going down to mouth-level (stop before jaw):
-    93, 132, 58,
+    93,
+    132,
+    58,
     # Inner-lower (mouth corner):
     61,
     # Nasolabial fold going back up to start:
-    216, 206, 98, 129,
+    216,
+    206,
+    98,
+    129,
 )
 
 CHIN_POLYGON: tuple[int, ...] = (
     # Ordered clockwise on the image, starting from the left mouth corner.
     # Top: outer lower lip line (left → right):
-    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
+    61,
+    146,
+    91,
+    181,
+    84,
+    17,
+    314,
+    405,
+    321,
+    375,
+    291,
     # Right jaw going down to chin tip:
-    365, 379, 378, 400, 377,
+    365,
+    379,
+    378,
+    400,
+    377,
     # Chin tip:
     152,
     # Left jaw going back up to start:
-    148, 176, 149, 150, 136,
+    148,
+    176,
+    149,
+    150,
+    136,
 )
 
 

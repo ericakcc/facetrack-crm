@@ -113,6 +113,70 @@ def test_overall_passed_requires_pose_and_exposure_and_sharpness() -> None:
     assert report.overall_passed is False
 
 
+def _yaw_only_matrix(yaw_deg: float) -> np.ndarray:
+    """Build a 4x4 facial-transform matrix with pure yaw, zero pitch/roll.
+
+    Matches the convention in ConsistencyGate._euler_from_matrix:
+        yaw   = atan2(r[1,0], r[0,0])
+        pitch = atan2(-r[2,0], sqrt(r[0,0]^2 + r[1,0]^2))
+        roll  = atan2(r[2,1], r[2,2])
+    so a Z-axis rotation by theta gives the desired yaw=theta, pitch=0, roll=0.
+    """
+    import math
+
+    theta = math.radians(yaw_deg)
+    m = np.eye(4, dtype=np.float32)
+    m[0, 0] = math.cos(theta)
+    m[0, 1] = -math.sin(theta)
+    m[1, 0] = math.sin(theta)
+    m[1, 1] = math.cos(theta)
+    return m
+
+
+def _pipeline_result_with_pose(yaw_deg: float) -> CVPipelineResult:
+    return CVPipelineResult(
+        aligned_image=np.zeros((10, 10, 3), dtype=np.uint8),
+        landmarks_px=np.zeros((0, 2), dtype=np.float32),
+        transformation_matrix=_yaw_only_matrix(yaw_deg),
+        face_detected=True,
+    )
+
+
+def test_pose_mode_frontal_passes_at_zero_yaw() -> None:
+    """A perfectly centred head must pass the frontal pose check."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _pipeline_result_with_pose(0.0), pose_mode="frontal")
+    assert report.pose.passed is True
+
+
+def test_pose_mode_profile_left_passes_at_strong_negative_yaw() -> None:
+    """yaw = -70° should satisfy the profile_left mode (threshold -55°)."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _pipeline_result_with_pose(-70.0), pose_mode="profile_left")
+    assert report.pose.passed is True
+    assert report.pose.measurement["mode"] == "profile_left"
+
+
+def test_pose_mode_profile_left_rejects_frontal_pose() -> None:
+    """A frontal photo must NOT pass when profile_left is requested."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _pipeline_result_with_pose(0.0), pose_mode="profile_left")
+    assert report.pose.passed is False
+    assert "轉向左側" in report.pose.reason
+
+
+def test_pose_mode_profile_right_passes_at_strong_positive_yaw() -> None:
+    """yaw = +65° should satisfy the profile_right mode."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _pipeline_result_with_pose(65.0), pose_mode="profile_right")
+    assert report.pose.passed is True
+    assert report.pose.measurement["mode"] == "profile_right"
+
+
 def test_quality_report_serialises_to_json_compatible_dict() -> None:
     """QualityReport.to_dict() must round-trip through json.dumps for DB storage."""
     import json

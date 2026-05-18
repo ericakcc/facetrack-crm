@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FaceTrack 即時拍攝</title>
+  <style>
+    :root {
+      --bg: #0a0a12;
+      --panel: #11111c;
+      --line: #1d1d2c;
+      --text: #e6e6f1;
+      --muted: #6b6b85;
+      --cyan: #00f0ff;
+      --magenta: #ff2bd6;
+      --green: #4ade80;
+      --red: #f87171;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC",
+                   "Microsoft JhengHei", system-ui, sans-serif;
+      overflow: hidden;
+    }
+    .root {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 12px;
+    }
+    .stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #050509;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px var(--line),
+                  0 0 40px rgba(0, 240, 255, 0.06),
+                  inset 0 0 80px rgba(0, 0, 0, 0.5);
+    }
+    video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      visibility: hidden;
+      z-index: 1;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 2;
+      /* Selfie-mirror the preview so it feels like a vanity mirror.
+         The underlying canvas pixel buffer is NOT flipped — only the visual
+         transform — so toDataURL/captureJpeg returns the true camera frame
+         and Python-side pose detection stays calibrated to real anatomy. */
+      transform: scaleX(-1);
+    }
+    .hud {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 14px;
+    }
+    .hud-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .mode-badge {
+      background: rgba(10, 10, 18, 0.7);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(0, 240, 255, 0.35);
+      color: var(--cyan);
+      padding: 8px 18px;
+      border-radius: 24px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      transition: all 0.2s ease;
+    }
+    .mode-badge.in-pose {
+      color: var(--green);
+      border-color: rgba(74, 222, 128, 0.7);
+      box-shadow: 0 0 18px rgba(74, 222, 128, 0.35);
+    }
+    .pose-readout {
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 11px;
+      background: rgba(10, 10, 18, 0.7);
+      backdrop-filter: blur(8px);
+      padding: 8px 12px;
+      border-radius: 6px;
+      color: var(--muted);
+      line-height: 1.7;
+      border: 1px solid var(--line);
+      min-width: 110px;
+    }
+    .pose-readout .lbl { color: var(--muted); display: inline-block; width: 38px; }
+    .pose-readout .val { color: var(--text); }
+    .pose-readout .val.ok { color: var(--green); }
+    .pose-readout .val.bad { color: var(--red); }
+    .hud-bottom {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .progress-ring { width: 56px; height: 56px; }
+    .progress-ring .bg { stroke: rgba(255, 255, 255, 0.08); }
+    .progress-ring .arc {
+      stroke: var(--cyan);
+      transition: stroke-dashoffset 80ms linear, stroke 200ms ease;
+      filter: drop-shadow(0 0 6px rgba(0, 240, 255, 0.6));
+    }
+    .progress-ring.in-pose .arc {
+      stroke: var(--green);
+      filter: drop-shadow(0 0 8px rgba(74, 222, 128, 0.7));
+    }
+    /* Big centred countdown number displayed inside the stage between the
+       moment a stable pose is detected and the moment the JPEG is captured.
+       Goes 3 → 2 → 1 → 📸 with a pulse per tick. */
+    .countdown-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      background: radial-gradient(circle at center,
+                                  rgba(0, 240, 255, 0.08) 0%,
+                                  transparent 60%);
+    }
+    .countdown-overlay.active { display: flex; }
+    .countdown-number {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-weight: 900;
+      font-size: 180px;
+      line-height: 1;
+      color: var(--green);
+      text-shadow: 0 0 24px rgba(74, 222, 128, 0.85),
+                   0 0 64px rgba(74, 222, 128, 0.45);
+      animation: countdownPulse 0.9s cubic-bezier(0.2, 0.7, 0.3, 1);
+    }
+    .countdown-number.flash {
+      color: #ffffff;
+      font-size: 110px;
+      text-shadow: 0 0 36px rgba(255, 255, 255, 0.95),
+                   0 0 96px rgba(0, 240, 255, 0.6);
+      animation: countdownFlash 0.45s ease-out;
+    }
+    @keyframes countdownPulse {
+      0%   { transform: scale(0.4); opacity: 0; }
+      18%  { transform: scale(1.25); opacity: 1; }
+      45%  { transform: scale(1.00); opacity: 1; }
+      100% { transform: scale(0.92); opacity: 0.85; }
+    }
+    @keyframes countdownFlash {
+      0%   { transform: scale(0.7); opacity: 0; }
+      30%  { transform: scale(1.4); opacity: 1; }
+      100% { transform: scale(1.0); opacity: 0.95; }
+    }
+    .instruction {
+      background: rgba(10, 10, 18, 0.85);
+      backdrop-filter: blur(10px);
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-align: center;
+      max-width: 480px;
+      border: 1px solid var(--line);
+    }
+    .thumbnails {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .thumb {
+      aspect-ratio: 4 / 3;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #07070d;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+    .thumb img {
+      width: 100%; height: 100%; object-fit: cover;
+      display: block;
+      /* Match the live preview's selfie-mirror so users see "what I just looked
+         like" — not a sudden left/right flip when the auto-capture fires. */
+      transform: scaleX(-1);
+    }
+    .thumb .placeholder {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 13px;
+    }
+    .thumb-label {
+      position: absolute;
+      top: 6px; left: 6px;
+      background: rgba(10, 10, 18, 0.85);
+      color: var(--cyan);
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      letter-spacing: 1px;
+      font-weight: 600;
+    }
+    .thumb.active {
+      border-color: var(--cyan);
+      box-shadow: 0 0 14px rgba(0, 240, 255, 0.35);
+    }
+    .thumb.done { border-color: var(--green); }
+    .thumb.done .thumb-label { color: var(--green); }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #1a1a2a;
+      color: var(--text);
+      border: 1px solid var(--line);
+      padding: 9px 22px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s ease;
+    }
+    button:hover:not(:disabled) {
+      background: #25253a;
+      border-color: #2e2e44;
+    }
+    button.primary {
+      background: var(--cyan);
+      color: var(--bg);
+      border-color: var(--cyan);
+      font-weight: 700;
+    }
+    button.primary:hover:not(:disabled) {
+      background: #4af4ff;
+      box-shadow: 0 0 16px rgba(0, 240, 255, 0.4);
+    }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    .status-line {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+      font-family: ui-monospace, monospace;
+    }
+    .error-banner {
+      display: none;
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: rgba(248, 113, 113, 0.08);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      border-radius: 6px;
+      color: var(--red);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      font-family: ui-monospace, monospace;
+    }
+    .error-banner.visible { display: block; }
+    .debug-log {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: #07070d;
+      border: 2px solid var(--cyan);
+      border-radius: 6px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px;
+      color: var(--muted);
+      max-height: 240px;
+      overflow-y: auto;
+      line-height: 1.6;
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
+    }
+    .debug-log-header {
+      font-size: 11px;
+      color: var(--cyan);
+      font-weight: 700;
+      margin-bottom: 4px;
+      letter-spacing: 1px;
+    }
+    .debug-log .ok { color: var(--green); }
+    .debug-log .err { color: var(--red); font-weight: 600; }
+    .debug-log .warn { color: #fbbf24; }
+    .build-tag {
+      margin-top: 6px;
+      text-align: center;
+      font-size: 10px;
+      color: #4a4a60;
+      font-family: ui-monospace, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="root">
+    <div style="background: #fde047; color: #1f1700; padding: 8px 14px; border-radius: 8px;
+                margin-bottom: 10px; font-weight: 700; font-size: 13px; text-align: center;
+                box-shadow: 0 0 24px rgba(253, 224, 71, 0.4);">
+      ⚡ NEW BUILD v13 · 2026-05-18 21:55 · sharpness 改算 face crop + JPEG quality 0.95
+    </div>
+
+    <div id="errorBanner" class="error-banner"></div>
+    <div class="debug-log-header">⬇ DEBUG LOG（截圖或選取下方文字貼給 Claude） ⬇</div>
+    <div id="debugLog" class="debug-log">[boot] component loaded</div>
+    <div class="actions" style="margin-top: 8px; margin-bottom: 12px;">
+      <button id="copyLogBtn">📋 複製 debug log</button>
+      <button id="retryBtn" class="primary">🔄 重新初始化</button>
+    </div>
+
+    <div class="stage">
+      <video id="cam" playsinline autoplay muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="countdownOverlay" class="countdown-overlay">
+        <div id="countdownNumber" class="countdown-number">3</div>
+      </div>
+      <div class="hud">
+        <div class="hud-top">
+          <div id="modeBadge" class="mode-badge">⏳ 初始化…</div>
+          <div class="pose-readout">
+            <span class="lbl">yaw</span>  <span id="yawVal" class="val">—</span><br />
+            <span class="lbl">pitch</span><span id="pitchVal" class="val">—</span><br />
+            <span class="lbl">roll</span> <span id="rollVal" class="val">—</span><br />
+            <span class="lbl">size</span> <span id="sizeVal" class="val">—</span>
+          </div>
+        </div>
+        <div class="hud-bottom">
+          <svg id="progRing" class="progress-ring" viewBox="0 0 56 56">
+            <circle class="bg" cx="28" cy="28" r="24" fill="none" stroke-width="4" />
+            <circle class="arc" id="progArc" cx="28" cy="28" r="24" fill="none"
+                    stroke-width="4" stroke-linecap="round"
+                    stroke-dasharray="150.8" stroke-dashoffset="150.8"
+                    transform="rotate(-90 28 28)" />
+          </svg>
+          <div id="instruction" class="instruction">請允許瀏覽器存取鏡頭。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="thumbnails">
+      <div class="thumb" id="thumbFront">
+        <div class="thumb-label">FRONT 正臉（必須）</div>
+        <div class="placeholder">待拍攝</div>
+      </div>
+      <div class="thumb" id="thumbLeft">
+        <div class="thumb-label">LEFT 左側（選擇性）</div>
+        <div class="placeholder">選擇性</div>
+      </div>
+      <div class="thumb" id="thumbRight">
+        <div class="thumb-label">RIGHT 右側（選擇性）</div>
+        <div class="placeholder">選擇性</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="retakeBtn" disabled>重拍當前</button>
+      <button id="resetBtn">全部重來</button>
+      <button id="finishBtn" class="primary" disabled>✓ 完成（送回 Python）</button>
+    </div>
+
+    <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
+    <div class="build-tag">build 2026-05-18T21:55 v13 · sharpness on face crop, JPEG q=0.95</div>
+  </div>
+
+  <script type="module">
+    // -------- Streamlit message bridge -----------------------------------
+    function sendToStreamlit(type, payload = {}) {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type, apiVersion: 1, ...payload },
+        "*"
+      );
+    }
+    function setComponentValue(value) {
+      sendToStreamlit("streamlit:setComponentValue", { value, dataType: "json" });
+    }
+    function setFrameHeight(h) {
+      sendToStreamlit("streamlit:setFrameHeight", { height: h });
+    }
+    function setReady() {
+      sendToStreamlit("streamlit:componentReady");
+    }
+
+    // -------- Defaults (overridden by Python via streamlit:render) -------
+    const cfg = {
+      stabilityFrames: 10,
+      countdownMs: 3000,
+      profileYawMinDeg: 5,
+      profilePitchTolDeg: 15,
+      frontYawTolDeg: 8,
+      frontPitchTolDeg: 10,
+      minFaceWidthRatio: 0.35,
+      maxFaceWidthRatio: 0.75,
+    };
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.type !== "streamlit:render") return;
+      const args = data.args || {};
+      for (const k of Object.keys(cfg)) {
+        if (typeof args[k] === "number") cfg[k] = args[k];
+      }
+      if (typeof args.height === "number") setFrameHeight(args.height);
+    });
+
+    setReady();
+    setFrameHeight(760);
+
+    // -------- DOM refs ---------------------------------------------------
+    const video = document.getElementById("cam");
+    const canvas = document.getElementById("overlay");
+    const ctx = canvas.getContext("2d");
+    const modeBadge = document.getElementById("modeBadge");
+    const instructionEl = document.getElementById("instruction");
+    const yawValEl = document.getElementById("yawVal");
+    const pitchValEl = document.getElementById("pitchVal");
+    const rollValEl = document.getElementById("rollVal");
+    const sizeValEl = document.getElementById("sizeVal");
+    const progRing = document.getElementById("progRing");
+    const progArc = document.getElementById("progArc");
+    const retakeBtn = document.getElementById("retakeBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const finishBtn = document.getElementById("finishBtn");
+    const errorBanner = document.getElementById("errorBanner");
+    const statusLine = document.getElementById("statusLine");
+    const debugLogEl = document.getElementById("debugLog");
+
+    function logStep(msg, level = "info") {
+      const ts = new Date().toISOString().slice(11, 23);
+      const cls = level === "ok" ? "ok" : level === "err" ? "err" : level === "warn" ? "warn" : "";
+      const line = document.createElement("div");
+      if (cls) line.className = cls;
+      line.textContent = `[${ts}] ${msg}`;
+      debugLogEl.appendChild(line);
+      debugLogEl.scrollTop = debugLogEl.scrollHeight;
+      console.log("[face_capture]", msg);
+    }
+    const thumbs = {
+      front: document.getElementById("thumbFront"),
+      left: document.getElementById("thumbLeft"),
+      right: document.getElementById("thumbRight"),
+    };
+    const ARC_LEN = 2 * Math.PI * 24;
+    progArc.setAttribute("stroke-dasharray", String(ARC_LEN));
+    progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+
+    const SEQUENCE = ["front", "left", "right"];
+    const MODE_LABELS = { front: "正臉", left: "左側臉", right: "右側臉" };
+    const INSTRUCTIONS = {
+      front: "請正對鏡頭、視線平視，鎖定後會倒數 3 秒拍照…",
+      left: "請輕微將頭轉向您的左邊（yaw < -5° 即可鎖定，只需露出左頰膚質）…",
+      right: "請輕微將頭轉向您的右邊（yaw > +5° 即可鎖定，只需露出右頰膚質）…",
+    };
+
+    // -------- State ------------------------------------------------------
+    let faceLandmarker = null;
+    let FaceLandmarkerCls = null;
+    let lockedAt = null;            // ms timestamp when pose locked (= countdown start)
+    let lastCountdownSecond = null; // tick tracker so we only re-animate on second changes
+    const countdownOverlay = document.getElementById("countdownOverlay");
+    const countdownNumberEl = document.getElementById("countdownNumber");
+
+    function showCountdown(secondsRemaining) {
+      countdownOverlay.classList.add("active");
+      const label = secondsRemaining <= 0 ? "📸" : String(secondsRemaining);
+      if (lastCountdownSecond === secondsRemaining) return;
+      lastCountdownSecond = secondsRemaining;
+      countdownNumberEl.textContent = label;
+      countdownNumberEl.classList.toggle("flash", secondsRemaining <= 0);
+      // Force animation restart.
+      countdownNumberEl.style.animation = "none";
+      void countdownNumberEl.offsetWidth;
+      countdownNumberEl.style.animation = "";
+    }
+
+    function hideCountdown() {
+      countdownOverlay.classList.remove("active");
+      lastCountdownSecond = null;
+    }
+    let captures = { front: null, left: null, right: null };
+    let currentIdx = 0;
+    let stableCount = 0;
+    let running = false;
+
+    function currentMode() {
+      return SEQUENCE[currentIdx] || null;
+    }
+
+    function showError(msg) {
+      errorBanner.textContent = msg;
+      errorBanner.classList.add("visible");
+    }
+
+    function updateUI() {
+      const mode = currentMode();
+      const captureCount = SEQUENCE.filter((m) => captures[m]).length;
+      if (mode) {
+        modeBadge.textContent = `📸 ${MODE_LABELS[mode]}`;
+        modeBadge.classList.remove("in-pose");
+        progRing.classList.remove("in-pose");
+        if (captures.front && mode !== "front") {
+          // After front is in the bag, side captures are optional. Make it
+          // explicit so the user doesn't think they have to keep going.
+          instructionEl.textContent =
+            INSTRUCTIONS[mode] +
+            "（側臉非必須，可直接按下方『✓ 完成』送出僅正臉的紀錄）";
+        } else {
+          instructionEl.textContent = INSTRUCTIONS[mode];
+        }
+      } else {
+        modeBadge.textContent = "✓ 三張全部完成";
+        modeBadge.classList.add("in-pose");
+        progRing.classList.add("in-pose");
+        instructionEl.textContent = "請按下「完成」把照片送回系統。";
+      }
+      for (const m of SEQUENCE) {
+        thumbs[m].classList.toggle("active", m === mode);
+        thumbs[m].classList.toggle("done", !!captures[m]);
+        const ph = thumbs[m].querySelector(".placeholder");
+        if (ph) {
+          ph.style.display = captures[m] ? "none" : "flex";
+          if (!captures[m] && m !== "front") {
+            ph.textContent = "選擇性";
+          }
+        }
+      }
+      retakeBtn.disabled = !captures[SEQUENCE[Math.max(0, currentIdx - 1)]] &&
+                          !(mode && captures[mode]);
+      // Finish is enabled the moment we have the front shot. Side photos are
+      // bonus context — the scoring engine only consumes the front photo.
+      finishBtn.disabled = !captures.front;
+      finishBtn.textContent = captureCount === 0
+        ? "✓ 完成（送回 Python）"
+        : captureCount === 3
+          ? "✓ 完成（送 3 張回 Python）"
+          : `✓ 完成（送 ${captureCount} 張，跳過剩下的側臉）`;
+    }
+
+    function eulerFromMatrix(m) {
+      // MediaPipe Tasks Vision returns a column-major 4x4 matrix.
+      // r[row, col] = m[col * 4 + row]
+      const r00 = m[0],  r10 = m[1],  r20 = m[2];
+      const r01 = m[4],  r11 = m[5],  r21 = m[6];
+      const r02 = m[8],  r12 = m[9],  r22 = m[10];
+      const sy = Math.sqrt(r00 * r00 + r10 * r10);
+      let pitch, yaw, roll;
+      if (sy > 1e-6) {
+        pitch = Math.atan2(-r20, sy);
+        yaw   = Math.atan2( r10, r00);
+        roll  = Math.atan2( r21, r22);
+      } else {
+        pitch = Math.atan2(-r20, sy);
+        yaw   = 0;
+        roll  = Math.atan2(-r12, r11);
+      }
+      const RAD = 180 / Math.PI;
+      return { yaw: yaw * RAD, pitch: pitch * RAD, roll: roll * RAD };
+    }
+
+    function checkPose(yaw, pitch, mode) {
+      if (mode === "front") {
+        return Math.abs(yaw) <= cfg.frontYawTolDeg &&
+               Math.abs(pitch) <= cfg.frontPitchTolDeg;
+      }
+      if (mode === "left") {
+        // User's anatomical left = head turning to its own left = negative yaw
+        // (MediaPipe convention: +yaw = head's right).
+        return yaw <= -cfg.profileYawMinDeg &&
+               Math.abs(pitch) <= cfg.profilePitchTolDeg;
+      }
+      if (mode === "right") {
+        return yaw >= cfg.profileYawMinDeg &&
+               Math.abs(pitch) <= cfg.profilePitchTolDeg;
+      }
+      return false;
+    }
+
+    function captureJpeg() {
+      const tmp = document.createElement("canvas");
+      tmp.width = video.videoWidth;
+      tmp.height = video.videoHeight;
+      const c = tmp.getContext("2d");
+      c.drawImage(video, 0, 0);
+      // JPEG quality 0.95 preserves high-frequency skin texture much better
+      // than the original 0.92 — under-quantization is the dominant cause of
+      // Mac webcam Laplacian variance landing in the 15–20 range.
+      const dataUrl = tmp.toDataURL("image/jpeg", 0.95);
+      return dataUrl.split(",", 2)[1];
+    }
+
+    function setThumb(mode, b64) {
+      const t = thumbs[mode];
+      const existing = t.querySelector("img");
+      if (existing) existing.remove();
+      const img = document.createElement("img");
+      img.src = "data:image/jpeg;base64," + b64;
+      t.insertBefore(img, t.firstChild);
+    }
+
+    function clearThumb(mode) {
+      const t = thumbs[mode];
+      const img = t.querySelector("img");
+      if (img) img.remove();
+    }
+
+    // -------- Setup ------------------------------------------------------
+    // Try multiple CDN versions / paths so we degrade gracefully when one is
+    // blocked. The model file is served locally from the component dir, so we
+    // never depend on Google's bucket being reachable from the user's network.
+    const TASKS_VISION_CDN_CANDIDATES = [
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20",
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18",
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest",
+      "https://unpkg.com/@mediapipe/tasks-vision@0.10.20",
+    ];
+
+    async function importTasksVision() {
+      let lastErr = null;
+      for (const base of TASKS_VISION_CDN_CANDIDATES) {
+        try {
+          logStep(`importing ${base}/+esm …`);
+          const mod = await import(base + "/+esm");
+          if (mod && mod.FaceLandmarker) {
+            logStep(`imported tasks-vision from ${base}`, "ok");
+            return { mod, base };
+          }
+          logStep(`${base} returned no FaceLandmarker`, "warn");
+        } catch (e) {
+          lastErr = e;
+          logStep(`import failed at ${base}: ${e?.message || e}`, "warn");
+        }
+      }
+      throw lastErr || new Error("無法從任何 CDN 載入 @mediapipe/tasks-vision");
+    }
+
+    async function probeModel() {
+      try {
+        logStep("HEAD face_landmarker.task …");
+        const r = await fetch("face_landmarker.task", { method: "HEAD" });
+        if (!r.ok) {
+          logStep(`model HEAD ${r.status} ${r.statusText}`, "err");
+          return false;
+        }
+        const len = r.headers.get("content-length");
+        logStep(`model reachable (${len || "?"} bytes, ${r.headers.get("content-type") || "?"})`, "ok");
+        return true;
+      } catch (e) {
+        logStep(`model fetch failed: ${e?.message || e}`, "err");
+        return false;
+      }
+    }
+
+    const MODEL_URL_CANDIDATES = [
+      "face_landmarker.task",
+      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+    ];
+
+    async function createLandmarker(FaceLandmarker, FilesetResolver, base) {
+      logStep(`loading WASM fileset from ${base}/wasm …`);
+      let vision;
+      try {
+        vision = await FilesetResolver.forVisionTasks(base + "/wasm");
+        logStep("WASM fileset loaded", "ok");
+      } catch (e) {
+        logStep(`WASM fileset failed: ${e?.message || e}`, "err");
+        throw e;
+      }
+      const delegates = ["GPU", "CPU"];
+      let lastErr = null;
+      for (const modelUrl of MODEL_URL_CANDIDATES) {
+        for (const delegate of delegates) {
+          try {
+            const shortUrl = modelUrl.length > 50 ? modelUrl.slice(0, 30) + "…" + modelUrl.slice(-20) : modelUrl;
+            logStep(`createFromOptions delegate=${delegate} model=${shortUrl} …`);
+            const lm = await FaceLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: modelUrl,
+                delegate,
+              },
+              runningMode: "VIDEO",
+              numFaces: 1,
+              outputFaceBlendshapes: false,
+              outputFacialTransformationMatrixes: true,
+            });
+            logStep(`FaceLandmarker created (${delegate} / ${shortUrl})`, "ok");
+            statusLine.textContent =
+              `MediaPipe Tasks Vision · 478 landmarks · ${delegate} delegate`;
+            return lm;
+          } catch (e) {
+            lastErr = e;
+            logStep(`${delegate} delegate FAILED: ${e?.name || ""} ${e?.message || e}`, "warn");
+          }
+        }
+      }
+      throw lastErr || new Error("FaceLandmarker init failed across all models/delegates");
+    }
+
+    async function setup() {
+      logStep(`UA: ${navigator.userAgent.slice(0, 80)}`);
+      logStep(`origin: ${location.origin}  href: ${location.href.slice(0, 80)}`);
+      const modelOk = await probeModel();
+      if (!modelOk) {
+        showError(
+          "無法從 component 目錄抓到 face_landmarker.task。\n" +
+            "請確認 src/facetrack/models/face_landmarker.task 存在，並重啟 Streamlit。"
+        );
+        modeBadge.textContent = "⚠️ 模型檔遺失";
+        instructionEl.textContent = "模型檔案無法載入。";
+        return;
+      }
+
+      let tasksVision, cdnBase;
+      try {
+        const imported = await importTasksVision();
+        tasksVision = imported.mod;
+        cdnBase = imported.base;
+      } catch (e) {
+        console.error("Failed to import tasks-vision:", e);
+        showError(
+          "無法載入 MediaPipe 模組：\n" +
+            (e?.message || e) +
+            "\n請確認網路可連 jsdelivr / unpkg，或改用上傳分頁。"
+        );
+        modeBadge.textContent = "⚠️ 無法載入";
+        instructionEl.textContent = "MediaPipe 模組載入失敗。";
+        return;
+      }
+      const { FaceLandmarker, FilesetResolver } = tasksVision;
+      if (!FaceLandmarker || !FilesetResolver) {
+        logStep(
+          `tasks-vision bundle missing exports: ` +
+            `FaceLandmarker=${typeof FaceLandmarker}, FilesetResolver=${typeof FilesetResolver}`,
+          "err"
+        );
+        showError("tasks-vision ESM bundle 缺少必要的 exports。");
+        modeBadge.textContent = "⚠️ Bundle 不完整";
+        return;
+      }
+      FaceLandmarkerCls = FaceLandmarker;
+
+      try {
+        faceLandmarker = await createLandmarker(FaceLandmarker, FilesetResolver, cdnBase);
+      } catch (e) {
+        console.error("Failed to create FaceLandmarker:", e);
+        logStep(`createLandmarker threw: ${e?.name || ""} ${e?.message || e}`, "err");
+        showError(
+          "MediaPipe 模型初始化失敗：\n" +
+            (e?.message || e) +
+            "\n（GPU 與 CPU 兩種 delegate 都失敗；詳細步驟請看下方 debug log）"
+        );
+        modeBadge.textContent = "⚠️ 模型錯誤";
+        instructionEl.textContent = "請改用上傳分頁。";
+        return;
+      }
+      // Verify the face landmark connection constants we need exist; if not,
+      // the bundled tasks-vision build is missing them and we'd silently crash
+      // inside the render loop. Surface it now with a clear error.
+      const requiredKeys = [
+        "FACE_LANDMARKS_TESSELATION",
+        "FACE_LANDMARKS_FACE_OVAL",
+        "FACE_LANDMARKS_LEFT_EYE",
+        "FACE_LANDMARKS_RIGHT_EYE",
+        "FACE_LANDMARKS_LEFT_EYEBROW",
+        "FACE_LANDMARKS_RIGHT_EYEBROW",
+        "FACE_LANDMARKS_LIPS",
+        "FACE_LANDMARKS_LEFT_IRIS",
+        "FACE_LANDMARKS_RIGHT_IRIS",
+      ];
+      const missing = requiredKeys.filter((k) => !Array.isArray(FaceLandmarker[k]));
+      if (missing.length) {
+        logStep(`tasks-vision missing constants: ${missing.join(", ")}`, "warn");
+      } else {
+        logStep("face landmark connection constants present", "ok");
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        logStep("navigator.mediaDevices is undefined (HTTPS required?)", "err");
+        showError(
+          "瀏覽器沒有 mediaDevices API。\n" +
+            "可能原因：(1) 不是 HTTPS / localhost；(2) iframe 沒有 camera 權限。\n" +
+            "目前 origin: " +
+            location.origin
+        );
+        modeBadge.textContent = "⚠️ 無 mediaDevices";
+        return;
+      }
+      try {
+        logStep("getUserMedia({video, audio:false}) …");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: "user" },
+          audio: false,
+        });
+        video.srcObject = stream;
+        await video.play();
+        logStep(`camera ${video.videoWidth}×${video.videoHeight}`, "ok");
+      } catch (e) {
+        logStep(`getUserMedia failed: ${e?.name || ""} ${e?.message || e}`, "err");
+        showError(
+          "無法存取鏡頭：\n" +
+            (e?.name || "") + " " + (e?.message || e) +
+            "\n請點擊網址列鎖頭圖示允許『相機』，或改用上傳分頁。"
+        );
+        modeBadge.textContent = "⚠️ 鏡頭被拒";
+        instructionEl.textContent = "請授權鏡頭存取，或改用上傳分頁。";
+        return;
+      }
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      video.style.visibility = "visible";
+      statusLine.textContent =
+        `MediaPipe Tasks Vision · 478 landmarks · ${video.videoWidth}×${video.videoHeight}`;
+      logStep("setup complete, entering render loop", "ok");
+      updateUI();
+      running = true;
+      requestAnimationFrame(loop);
+    }
+
+    // -------- Render loop -----------------------------------------------
+    // Self-contained connector drawing — no dependency on DrawingUtils, which
+    // is unreliable in some jsdelivr +esm bundles of tasks-vision.
+    function drawConnectorsManual(landmarks, connections, color, lineWidth) {
+      if (!Array.isArray(connections)) return;
+      const W = canvas.width, H = canvas.height;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      for (const c of connections) {
+        const a = landmarks[c.start];
+        const b = landmarks[c.end];
+        if (!a || !b) continue;
+        ctx.moveTo(a.x * W, a.y * H);
+        ctx.lineTo(b.x * W, b.y * H);
+      }
+      ctx.stroke();
+    }
+
+    // Per-landmark colour map: rebuilt once when FaceLandmarker is ready so
+    // we can colour all 478 dots by anatomical region (eyebrow / eye / lips /
+    // iris / face oval) on the per-frame hot path.
+    const REGION_PALETTE = {
+      faceOval:      "#00f0ff",  // cyan
+      leftEye:       "#ffe066",  // soft yellow
+      rightEye:      "#ffe066",
+      leftEyebrow:   "#4ade80",  // green
+      rightEyebrow:  "#4ade80",
+      lips:          "#ff6b9a",  // pink-red
+      leftIris:      "#ff2bd6",  // magenta
+      rightIris:     "#ff2bd6",
+      mesh:          "rgba(140, 200, 230, 0.55)",  // pale cyan default
+    };
+    let regionColorByIndex = null;
+
+    function buildRegionColors() {
+      const map = new Array(478).fill(REGION_PALETTE.mesh);
+      const tag = (setKey, color) => {
+        const set = FaceLandmarkerCls[setKey];
+        if (!Array.isArray(set)) return;
+        for (const c of set) {
+          if (c.start != null) map[c.start] = color;
+          if (c.end != null) map[c.end] = color;
+        }
+      };
+      tag("FACE_LANDMARKS_FACE_OVAL", REGION_PALETTE.faceOval);
+      tag("FACE_LANDMARKS_LEFT_EYEBROW", REGION_PALETTE.leftEyebrow);
+      tag("FACE_LANDMARKS_RIGHT_EYEBROW", REGION_PALETTE.rightEyebrow);
+      tag("FACE_LANDMARKS_LEFT_EYE", REGION_PALETTE.leftEye);
+      tag("FACE_LANDMARKS_RIGHT_EYE", REGION_PALETTE.rightEye);
+      tag("FACE_LANDMARKS_LIPS", REGION_PALETTE.lips);
+      tag("FACE_LANDMARKS_LEFT_IRIS", REGION_PALETTE.leftIris);
+      tag("FACE_LANDMARKS_RIGHT_IRIS", REGION_PALETTE.rightIris);
+      regionColorByIndex = map;
+    }
+
+    function drawLandmarks(landmarks) {
+      const W = canvas.width, H = canvas.height;
+
+      // Layer 1 — full tessellation, faint, the classic "wireframe mask".
+      drawConnectorsManual(
+        landmarks,
+        FaceLandmarkerCls.FACE_LANDMARKS_TESSELATION,
+        "rgba(0, 240, 255, 0.13)",
+        0.5
+      );
+
+      // Layer 2 — every one of the 478 points as a tiny square, coloured by region.
+      if (!regionColorByIndex) buildRegionColors();
+      for (let i = 0; i < landmarks.length; i++) {
+        const p = landmarks[i];
+        if (!p) continue;
+        ctx.fillStyle = regionColorByIndex[i] || REGION_PALETTE.mesh;
+        ctx.fillRect(p.x * W - 0.9, p.y * H - 0.9, 1.8, 1.8);
+      }
+
+      // Layer 3 — bright neon contours with a soft glow.
+      ctx.shadowColor = "rgba(0, 240, 255, 0.55)";
+      ctx.shadowBlur = 4;
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_FACE_OVAL, REGION_PALETTE.faceOval, 1.8);
+      ctx.shadowBlur = 2;
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_LEFT_EYEBROW, REGION_PALETTE.leftEyebrow, 1.3);
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_RIGHT_EYEBROW, REGION_PALETTE.rightEyebrow, 1.3);
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_LEFT_EYE, REGION_PALETTE.leftEye, 1.3);
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_RIGHT_EYE, REGION_PALETTE.rightEye, 1.3);
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_LIPS, REGION_PALETTE.lips, 1.4);
+      ctx.shadowColor = "rgba(255, 43, 214, 0.7)";
+      ctx.shadowBlur = 5;
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_LEFT_IRIS, REGION_PALETTE.leftIris, 1.4);
+      drawConnectorsManual(landmarks, FaceLandmarkerCls.FACE_LANDMARKS_RIGHT_IRIS, REGION_PALETTE.rightIris, 1.4);
+      ctx.shadowBlur = 0;
+
+      // Layer 4 — 6 pose-anchor dots that turn green when the pose locks in.
+      const anchors = [1, 152, 33, 263, 61, 291];
+      const inPose = modeBadge.classList.contains("in-pose");
+      ctx.fillStyle = inPose ? "#4ade80" : "#ffffff";
+      ctx.shadowColor = inPose ? "rgba(74, 222, 128, 0.95)" : "rgba(255, 255, 255, 0.7)";
+      ctx.shadowBlur = 10;
+      for (const i of anchors) {
+        const p = landmarks[i];
+        if (!p) continue;
+        ctx.beginPath();
+        ctx.arc(p.x * W, p.y * H, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    function loop() {
+      if (!running) return;
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      let detected = false;
+      if (faceLandmarker && video.readyState >= 2) {
+        const ts = performance.now();
+        const result = faceLandmarker.detectForVideo(video, ts);
+        if (result.faceLandmarks && result.faceLandmarks.length > 0) {
+          detected = true;
+          const landmarks = result.faceLandmarks[0];
+          drawLandmarks(landmarks);
+
+          // Face-frame size ratio: how much of the frame width the face fills.
+          // Used as a distance proxy — too small = blurry skin texture; too big
+          // = chin/ears clipped, alignment landmarks unreliable.
+          let minX = 1, maxX = 0;
+          for (let i = 0; i < landmarks.length; i++) {
+            const p = landmarks[i];
+            if (!p) continue;
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+          }
+          const faceWidthRatio = Math.max(0, maxX - minX);
+
+          const mat =
+            result.facialTransformationMatrixes &&
+            result.facialTransformationMatrixes[0];
+          if (mat && mat.data) {
+            const { yaw, pitch, roll } = eulerFromMatrix(mat.data);
+            yawValEl.textContent = yaw.toFixed(1) + "°";
+            pitchValEl.textContent = pitch.toFixed(1) + "°";
+            rollValEl.textContent = roll.toFixed(1) + "°";
+            sizeValEl.textContent = (faceWidthRatio * 100).toFixed(0) + "%";
+
+            const mode = currentMode();
+            if (mode && !captures[mode]) {
+              const yawOk =
+                mode === "front" ? Math.abs(yaw) <= cfg.frontYawTolDeg :
+                mode === "left"  ? yaw <= -cfg.profileYawMinDeg :
+                                   yaw >= cfg.profileYawMinDeg;
+              const pitchTol = mode === "front" ? cfg.frontPitchTolDeg : cfg.profilePitchTolDeg;
+              const pitchOk = Math.abs(pitch) <= pitchTol;
+              const tooFar = faceWidthRatio < cfg.minFaceWidthRatio;
+              const tooClose = faceWidthRatio > cfg.maxFaceWidthRatio;
+              const distanceOk = !tooFar && !tooClose;
+              yawValEl.className = "val " + (yawOk ? "ok" : "bad");
+              pitchValEl.className = "val " + (pitchOk ? "ok" : "bad");
+              sizeValEl.className = "val " + (distanceOk ? "ok" : "bad");
+              rollValEl.className = "val";
+
+              // Dynamic instruction priority: lock > distance > orientation.
+              if (lockedAt === null) {
+                if (yawOk && pitchOk && tooFar) {
+                  instructionEl.textContent =
+                    "📍 太遠了！請靠近鏡頭一點（臉佔畫面要 ≥ " +
+                    Math.round(cfg.minFaceWidthRatio * 100) + "%）";
+                } else if (yawOk && pitchOk && tooClose) {
+                  instructionEl.textContent =
+                    "📍 太近了！請稍微後退（避免下巴/耳朵超出畫面）";
+                } else {
+                  instructionEl.textContent = INSTRUCTIONS[mode];
+                }
+              }
+
+              const inPose = yawOk && pitchOk && distanceOk;
+              if (inPose) {
+                stableCount = Math.min(stableCount + 1, cfg.stabilityFrames);
+                modeBadge.classList.add("in-pose");
+                progRing.classList.add("in-pose");
+              } else {
+                stableCount = Math.max(stableCount - 2, 0);
+                modeBadge.classList.remove("in-pose");
+                progRing.classList.remove("in-pose");
+              }
+              const progress = stableCount / cfg.stabilityFrames;
+              progArc.setAttribute(
+                "stroke-dashoffset",
+                String(ARC_LEN * (1 - progress))
+              );
+
+              if (lockedAt === null) {
+                // SEEKING — fill the progress ring until a stable pose is held
+                // long enough to commit, then enter the COUNTDOWN phase.
+                if (stableCount >= cfg.stabilityFrames) {
+                  lockedAt = performance.now();
+                  instructionEl.textContent = "🎯 鎖定！請保持姿勢…";
+                  logStep(`pose locked (${mode}) — countdown begin`, "ok");
+                }
+              } else {
+                // COUNTDOWN — render the big number; capture when it expires.
+                // Brief out-of-pose wobble does NOT cancel: by this point the
+                // user has already been told to hold still, and cancelling on
+                // every micro-movement is worse UX than capturing a slightly
+                // wobbly frame (ConsistencyGate will catch genuinely-bad ones
+                // on the Python side anyway).
+                const elapsed = performance.now() - lockedAt;
+                const remaining = cfg.countdownMs - elapsed;
+                if (remaining <= 0) {
+                  showCountdown(0);  // flash 📸 once before clearing
+                  const b64 = captureJpeg();
+                  captures[mode] = {
+                    jpeg_b64: b64,
+                    yaw,
+                    pitch,
+                    roll,
+                    captured_at: new Date().toISOString(),
+                  };
+                  setThumb(mode, b64);
+                  stableCount = 0;
+                  lockedAt = null;
+                  progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+                  currentIdx += 1;
+                  updateUI();
+                  setTimeout(hideCountdown, 350);
+                } else {
+                  showCountdown(Math.ceil(remaining / 1000));
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!detected) {
+        yawValEl.textContent = "—";
+        pitchValEl.textContent = "—";
+        rollValEl.textContent = "—";
+        sizeValEl.textContent = "—";
+        yawValEl.className = "val";
+        pitchValEl.className = "val";
+        sizeValEl.className = "val";
+        if (lockedAt === null) {
+          // Only erode the seeking ring when we haven't already committed.
+          stableCount = Math.max(stableCount - 2, 0);
+          progArc.setAttribute(
+            "stroke-dashoffset",
+            String(ARC_LEN * (1 - stableCount / cfg.stabilityFrames))
+          );
+          modeBadge.classList.remove("in-pose");
+          progRing.classList.remove("in-pose");
+        } else {
+          // We're mid-countdown but the face dropped out (eg. turned too far
+          // for MediaPipe on a side profile). Keep counting down so the user
+          // doesn't have to start over; tick the visible number too.
+          const mode = currentMode();
+          if (mode && !captures[mode]) {
+            const remaining = cfg.countdownMs - (performance.now() - lockedAt);
+            if (remaining <= 0) {
+              showCountdown(0);
+              const b64 = captureJpeg();
+              captures[mode] = {
+                jpeg_b64: b64,
+                yaw: 0, pitch: 0, roll: 0,
+                captured_at: new Date().toISOString(),
+                face_lost_at_capture: true,
+              };
+              setThumb(mode, b64);
+              stableCount = 0;
+              lockedAt = null;
+              progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+              currentIdx += 1;
+              updateUI();
+              setTimeout(hideCountdown, 350);
+            } else {
+              showCountdown(Math.ceil(remaining / 1000));
+            }
+          }
+        }
+      }
+
+      ctx.restore();
+      requestAnimationFrame(loop);
+    }
+
+    // -------- Button handlers -------------------------------------------
+    retakeBtn.addEventListener("click", () => {
+      let target = currentMode();
+      if (!target || !captures[target]) {
+        for (let i = SEQUENCE.length - 1; i >= 0; i--) {
+          if (captures[SEQUENCE[i]]) { target = SEQUENCE[i]; break; }
+        }
+      }
+      if (!target) return;
+      captures[target] = null;
+      clearThumb(target);
+      currentIdx = SEQUENCE.indexOf(target);
+      stableCount = 0;
+      lockedAt = null;
+      hideCountdown();
+      progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+      updateUI();
+    });
+
+    resetBtn.addEventListener("click", () => {
+      captures = { front: null, left: null, right: null };
+      for (const m of SEQUENCE) clearThumb(m);
+      currentIdx = 0;
+      stableCount = 0;
+      lockedAt = null;
+      hideCountdown();
+      progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+      updateUI();
+    });
+
+    finishBtn.addEventListener("click", () => {
+      // Front photo is required — it's the only one the scoring engine consumes.
+      // Side photos are optional bonus context.
+      if (!captures.front) return;
+      setComponentValue({
+        front: captures.front,
+        left: captures.left,    // null if user skipped
+        right: captures.right,  // null if user skipped
+        session_id: Date.now(),
+      });
+    });
+
+    const copyLogBtn = document.getElementById("copyLogBtn");
+    const retryBtn = document.getElementById("retryBtn");
+    copyLogBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(debugLogEl.textContent);
+        copyLogBtn.textContent = "✓ 已複製";
+        setTimeout(() => (copyLogBtn.textContent = "📋 複製 debug log"), 2000);
+      } catch (e) {
+        const r = document.createRange();
+        r.selectNodeContents(debugLogEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    });
+    retryBtn.addEventListener("click", () => location.reload());
+
+    setup();
+  </script>
+</body>
+</html>

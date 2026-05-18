@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import date, datetime
 from pathlib import Path
@@ -14,7 +15,17 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlmodel import select
 
-from facetrack.config import PHOTOS_DIR
+from facetrack.components.face_capture import face_capture
+from facetrack.config import (
+    LIVE_CAPTURE_COUNTDOWN_MS,
+    LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
+    LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
+    LIVE_CAPTURE_STABILITY_FRAMES,
+    PHOTOS_DIR,
+    POSE_TOLERANCE_DEG,
+    PROFILE_PITCH_TOLERANCE_DEG,
+    PROFILE_YAW_MIN_DEG,
+)
 from facetrack.consistency_gate import QualityReport, get_gate
 from facetrack.cv_pipeline import get_pipeline
 from facetrack.db import (
@@ -265,47 +276,117 @@ def _render_quality_report(report: QualityReport) -> None:
         st.success(report.summary_zh)
 
 
+def _decode_b64_jpeg(b64: str) -> np.ndarray | None:
+    """Decode a base64 JPEG (no data URL prefix) into a BGR np.ndarray."""
+    try:
+        raw = base64.b64decode(b64)
+    except (ValueError, TypeError):
+        return None
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+
 def page_intake(patient: Patient) -> None:
     st.header(f"📸 新增就診｜{patient.name}")
     st.caption(
-        "使用相機即時拍攝、或上傳既有照片。系統會先執行『影像一致性檢查』，通過後才計算分數。"
+        "即時相機會用 MediaPipe Face Mesh 引導拍攝。"
+        "**正臉是必須的**，左右側臉是選擇性（拍了會作為紀錄、但不參與計分）。"
+        "正臉拍完後可直接按『✓ 完成』送出；若鏡頭無法使用，可改用『上傳照片』fallback。"
     )
 
-    source_tabs = st.tabs(["📷 即時拍照", "📁 上傳照片"])
+    front_image_bgr: np.ndarray | None = None
+    left_image_bgr: np.ndarray | None = None
+    right_image_bgr: np.ndarray | None = None
+    capture_meta: dict[str, Any] = {}
+
+    source_tabs = st.tabs(["📷 即時拍照（MediaPipe Face Mesh）", "📁 上傳照片（fallback）"])
+
     with source_tabs[0]:
-        camera_photo = st.camera_input(
-            "請對準鏡頭，按下方按鈕拍攝",
-            help="與真實診所動線一致：櫃台拍攝後系統即時把關，不通過會立刻退回重拍。",
-            key=f"camera_{patient.id}",
+        st.markdown(
+            "**操作流程**：對著鏡頭 → 系統偵測到正臉、鎖定後倒數 3 秒自動拍照 → 按下「✓ 完成」送回。"
+            "拍完正臉後若想多留一張側臉膚質紀錄，可繼續轉頭；不想拍直接按「完成」即可。"
         )
+        capture_value = face_capture(
+            key=f"face_capture_{patient.id}",
+            stability_frames=LIVE_CAPTURE_STABILITY_FRAMES,
+            countdown_ms=LIVE_CAPTURE_COUNTDOWN_MS,
+            profile_yaw_min_deg=PROFILE_YAW_MIN_DEG,
+            profile_pitch_tol_deg=PROFILE_PITCH_TOLERANCE_DEG,
+            front_yaw_tol_deg=POSE_TOLERANCE_DEG,
+            front_pitch_tol_deg=POSE_TOLERANCE_DEG + 2.0,
+            min_face_width_ratio=LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
+            max_face_width_ratio=LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
+        )
+        if capture_value:
+            front_image_bgr = _decode_b64_jpeg(capture_value["front"]["jpeg_b64"])
+            if capture_value.get("left"):
+                left_image_bgr = _decode_b64_jpeg(capture_value["left"]["jpeg_b64"])
+            if capture_value.get("right"):
+                right_image_bgr = _decode_b64_jpeg(capture_value["right"]["jpeg_b64"])
+            capture_meta = {
+                role: {k: v for k, v in payload.items() if k != "jpeg_b64"}
+                for role, payload in capture_value.items()
+                if isinstance(payload, dict)
+            }
+            with st.expander("瀏覽器端 pose 量測（給 reviewer 看）", expanded=False):
+                st.json(capture_meta, expanded=False)
+
     with source_tabs[1]:
         uploaded_file = st.file_uploader(
-            "選擇照片（JPG / PNG）",
+            "選擇正臉照片（JPG / PNG）— 不會自動帶側臉",
             type=["jpg", "jpeg", "png"],
             key=f"uploader_{patient.id}",
         )
+        if uploaded_file is not None:
+            file_bytes = np.frombuffer(uploaded_file.getvalue(), dtype=np.uint8)
+            decoded = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            if decoded is None:
+                st.error("無法解讀此圖檔。")
+            else:
+                front_image_bgr = decoded
 
-    uploaded = camera_photo or uploaded_file
-    if not uploaded:
-        st.info("尚未取得照片。建議拍攝條件：正面、均勻光線、距離 30–50 公分、無濾鏡。")
-        return
-
-    file_bytes = np.frombuffer(uploaded.getvalue(), dtype=np.uint8)
-    image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if image_bgr is None:
-        st.error("無法解讀此圖檔。")
+    if front_image_bgr is None:
+        st.info(
+            "尚未取得正臉照片。建議拍攝條件：正面、均勻光線、距離 30–50 公分、無濾鏡。"
+            "若上方鏡頭無法啟動，請點選『上傳照片（fallback）』分頁。"
+        )
         return
 
     pipeline = _pipeline()
-    pipeline_result = pipeline.process(image_bgr)
+    pipeline_result = pipeline.process(front_image_bgr)
     gate = _gate()
-    report, calibrated = gate.evaluate(image_bgr, pipeline_result)
+    report, calibrated = gate.evaluate(front_image_bgr, pipeline_result, pose_mode="frontal")
 
-    st.subheader("① 影像一致性檢查")
+    st.subheader("① 影像一致性檢查（正臉）")
     _render_quality_report(report)
 
+    if left_image_bgr is not None or right_image_bgr is not None:
+        st.subheader("側臉一致性檢查（不參與計分，僅作為紀錄）")
+        side_specs = []
+        if left_image_bgr is not None:
+            side_specs.append(("左側", "profile_left", left_image_bgr))
+        if right_image_bgr is not None:
+            side_specs.append(("右側", "profile_right", right_image_bgr))
+        side_cols = st.columns(len(side_specs)) if side_specs else []
+        side_calibrated_imgs: dict[str, np.ndarray] = {}
+        side_reports: dict[str, QualityReport] = {}
+        for col, (label, mode, img) in zip(side_cols, side_specs, strict=False):
+            side_pipe = pipeline.process(img)
+            s_report, s_cal = gate.evaluate(img, side_pipe, pose_mode=mode)
+            side_reports[mode] = s_report
+            side_calibrated_imgs[mode] = s_cal
+            with col:
+                st.markdown(f"**{label}**")
+                _render_quality_report(s_report)
+                st.image(
+                    cv2.cvtColor(s_cal, cv2.COLOR_BGR2RGB),
+                    use_container_width=True,
+                )
+    else:
+        side_calibrated_imgs = {}
+
     if not pipeline_result.face_detected:
-        st.error("未偵測到臉部，已中止後續處理。")
+        st.error("正臉未偵測到臉部，已中止後續處理。")
         return
 
     st.subheader("② 對齊與色素熱力圖")
@@ -400,13 +481,25 @@ def page_intake(patient: Patient) -> None:
     st.subheader("⑤ 儲存就診紀錄")
     save_col, _ = st.columns([1, 3])
     if save_col.button("💾 儲存到病患歷史", type="primary"):
-        photo_path = PHOTOS_DIR / f"patient{patient.id}_{datetime.utcnow():%Y%m%d_%H%M%S}.jpg"
-        cv2.imwrite(str(photo_path), calibrated)
+        ts = f"{datetime.utcnow():%Y%m%d_%H%M%S}"
+        front_path = PHOTOS_DIR / f"patient{patient.id}_{ts}_front.jpg"
+        cv2.imwrite(str(front_path), calibrated)
+        photo_root = PHOTOS_DIR.parent.parent
+
+        side_paths: dict[str, str | None] = {"profile_left": None, "profile_right": None}
+        for mode, img in side_calibrated_imgs.items():
+            suffix = "left" if mode == "profile_left" else "right"
+            side_file = PHOTOS_DIR / f"patient{patient.id}_{ts}_{suffix}.jpg"
+            cv2.imwrite(str(side_file), img)
+            side_paths[mode] = str(side_file.relative_to(photo_root))
+
         with get_session() as session:
             visit = Visit(
                 patient_id=patient.id,
                 visit_date=date.today(),
-                photo_path=str(photo_path.relative_to(PHOTOS_DIR.parent.parent)),
+                photo_path=str(front_path.relative_to(photo_root)),
+                photo_left_path=side_paths["profile_left"],
+                photo_right_path=side_paths["profile_right"],
                 quality_passed=report.overall_passed,
                 quality_report_json=json.dumps(report.to_dict(), ensure_ascii=False, default=str),
             )
@@ -434,8 +527,10 @@ def page_intake(patient: Patient) -> None:
                 )
             )
             session.commit()
+        side_count = sum(1 for p in side_paths.values() if p)
         st.success(
-            f"已儲存就診紀錄（visit_id={visit.id}）。請切換到『縱向追蹤』檢視更新後的趨勢圖。"
+            f"已儲存就診紀錄（visit_id={visit.id}，含 {side_count} 張側臉）。"
+            "請切換到『縱向追蹤』檢視更新後的趨勢圖。"
         )
 
 
@@ -459,10 +554,20 @@ def page_history(patient: Patient) -> None:
         with st.expander(f"📅 {v.visit_date} — 品管 {'通過' if v.quality_passed else '未通過'}"):
             cols = st.columns([1, 2])
             with cols[0]:
-                photo = Path(v.photo_path) if v.photo_path else None
-                if photo and photo.exists():
-                    st.image(str(photo), caption="儲存的照片")
-                else:
+                photo_specs = [
+                    ("正臉", v.photo_path),
+                    ("左側", getattr(v, "photo_left_path", None)),
+                    ("右側", getattr(v, "photo_right_path", None)),
+                ]
+                shown = 0
+                for label, path_str in photo_specs:
+                    if not path_str:
+                        continue
+                    p = Path(path_str)
+                    if p.exists():
+                        st.image(str(p), caption=label, use_container_width=True)
+                        shown += 1
+                if shown == 0:
                     st.caption("（此筆為 seed 資料，無實際照片）")
             with cols[1]:
                 try:

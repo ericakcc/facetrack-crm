@@ -1,0 +1,97 @@
+"""Live MediaPipe Face Mesh capture (front + left + right profile).
+
+Renders a webcam stream with a neon face-mesh overlay, computes head pose
+client-side from MediaPipe's `facialTransformationMatrixes`, and auto-captures
+a JPEG when the user holds the requested pose stable for ~0.6 s.
+
+Returns a dict shaped:
+
+    {
+        "front": {"jpeg_b64": str, "yaw": float, "pitch": float, "roll": float, "captured_at": iso},
+        "left":  {...} | None,
+        "right": {...} | None,
+        "session_id": int,
+    }
+
+`None` is returned until the user clicks the "完成" button in the widget.
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+from typing import Any
+
+import streamlit.components.v1 as components
+
+_FRONTEND_DIR = Path(__file__).parent / "frontend"
+_VENDORED_MODEL = Path(__file__).resolve().parents[2] / "models" / "face_landmarker.task"
+_FRONTEND_MODEL = _FRONTEND_DIR / "face_landmarker.task"
+
+
+def _ensure_model_available() -> None:
+    """Mirror the vendored MediaPipe model into the component's static dir.
+
+    Streamlit serves the entire `path=` directory as the iframe's origin, so
+    putting the model file here lets `index.html` load it with a relative URL
+    — no CDN, no CORS, works offline. We avoid checking it into the repo
+    twice by copying lazily on first import.
+    """
+    if not _VENDORED_MODEL.exists():
+        return  # The component HTML degrades gracefully and shows a banner.
+    if (
+        _FRONTEND_MODEL.exists()
+        and _FRONTEND_MODEL.stat().st_size == _VENDORED_MODEL.stat().st_size
+    ):
+        return
+    shutil.copyfile(_VENDORED_MODEL, _FRONTEND_MODEL)
+
+
+_ensure_model_available()
+
+_component_func = components.declare_component(
+    "face_capture",
+    path=str(_FRONTEND_DIR),
+)
+
+
+def face_capture(
+    *,
+    key: str | None = None,
+    stability_frames: int = 10,
+    countdown_ms: int = 3000,
+    profile_yaw_min_deg: float = 5.0,
+    profile_pitch_tol_deg: float = 15.0,
+    front_yaw_tol_deg: float = 8.0,
+    front_pitch_tol_deg: float = 10.0,
+    min_face_width_ratio: float = 0.35,
+    max_face_width_ratio: float = 0.75,
+    height: int = 1200,
+) -> dict[str, Any] | None:
+    """Render the live face-mesh capture widget.
+
+    Args:
+        key: Streamlit widget key (must be stable across reruns).
+        stability_frames: How many consecutive in-pose frames before auto-capture.
+        profile_yaw_min_deg: Minimum |yaw| to count as a profile pose.
+        profile_pitch_tol_deg: Pitch tolerance while in profile mode.
+        front_yaw_tol_deg: Yaw tolerance for the frontal pose.
+        front_pitch_tol_deg: Pitch tolerance for the frontal pose.
+        height: iframe height in pixels.
+
+    Returns:
+        The capture payload, or None until the user clicks "完成".
+    """
+    return _component_func(
+        stabilityFrames=stability_frames,
+        countdownMs=countdown_ms,
+        profileYawMinDeg=profile_yaw_min_deg,
+        profilePitchTolDeg=profile_pitch_tol_deg,
+        frontYawTolDeg=front_yaw_tol_deg,
+        frontPitchTolDeg=front_pitch_tol_deg,
+        minFaceWidthRatio=min_face_width_ratio,
+        maxFaceWidthRatio=max_face_width_ratio,
+        height=height,
+        key=key,
+        default=None,
+    )

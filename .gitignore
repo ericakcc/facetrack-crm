@@ -35,6 +35,10 @@ data/test_images/self_*.jpeg
 # Streamlit
 .streamlit/secrets.toml
 
+# Auto-mirrored MediaPipe model for the face_capture custom component
+# (copied at import time from src/facetrack/models/face_landmarker.task)
+src/facetrack/components/face_capture/frontend/face_landmarker.task
+
 # Test / coverage
 .pytest_cache/
 .coverage

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -32,9 +32,13 @@ from facetrack.config import (
     EXPOSURE_HIGH_PCT,
     EXPOSURE_LOW_PCT,
     POSE_TOLERANCE_DEG,
+    PROFILE_PITCH_TOLERANCE_DEG,
+    PROFILE_YAW_MIN_DEG,
     SHARPNESS_MIN_LAPLACIAN_VAR,
 )
 from facetrack.cv_pipeline import CVPipelineResult
+
+PoseMode = Literal["frontal", "profile_left", "profile_right"]
 
 
 @dataclass
@@ -72,33 +76,46 @@ class ConsistencyGate:
         exposure_low_pct: float = EXPOSURE_LOW_PCT,
         exposure_high_pct: float = EXPOSURE_HIGH_PCT,
         sharpness_min_var: float = SHARPNESS_MIN_LAPLACIAN_VAR,
+        profile_yaw_min_deg: float = PROFILE_YAW_MIN_DEG,
+        profile_pitch_tolerance_deg: float = PROFILE_PITCH_TOLERANCE_DEG,
     ) -> None:
         self.pose_tolerance_deg = pose_tolerance_deg
         self.exposure_low_pct = exposure_low_pct
         self.exposure_high_pct = exposure_high_pct
         self.sharpness_min_var = sharpness_min_var
+        self.profile_yaw_min_deg = profile_yaw_min_deg
+        self.profile_pitch_tolerance_deg = profile_pitch_tolerance_deg
         self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
         self._aruco_detector = cv2.aruco.ArucoDetector(self._aruco_dict)
 
     # -------- Public API --------
 
     def evaluate(
-        self, image_bgr: np.ndarray, pipeline_result: CVPipelineResult
+        self,
+        image_bgr: np.ndarray,
+        pipeline_result: CVPipelineResult,
+        pose_mode: PoseMode = "frontal",
     ) -> tuple[QualityReport, np.ndarray]:
         """Run all four checks on a photo.
 
         Args:
             image_bgr: The original intake image (before alignment).
             pipeline_result: Output from FacePipeline.process(image_bgr).
+            pose_mode: Which pose family to validate against —
+                "frontal" (default, ±tolerance on yaw/pitch/roll),
+                "profile_left" (yaw must be more negative than -profile_yaw_min_deg),
+                "profile_right" (yaw must exceed +profile_yaw_min_deg).
+                Roll is always checked against the frontal tolerance because the
+                head should never tilt sideways, regardless of left/right rotation.
 
         Returns:
             Tuple of (QualityReport, calibrated_image).
             `calibrated_image` is the input with white-balance applied if a
             gray-card / ArUco marker was detected, otherwise unchanged.
         """
-        pose = self._check_pose(pipeline_result)
+        pose = self._check_pose(pipeline_result, pose_mode=pose_mode)
         exposure = self._check_exposure(image_bgr)
-        sharpness = self._check_sharpness(image_bgr)
+        sharpness = self._check_sharpness(image_bgr, pipeline_result)
         color, calibrated = self._check_and_calibrate_color(image_bgr)
 
         failure_reasons = [
@@ -127,7 +144,11 @@ class ConsistencyGate:
 
     # -------- Pose --------
 
-    def _check_pose(self, pipeline_result: CVPipelineResult) -> CheckResult:
+    def _check_pose(
+        self,
+        pipeline_result: CVPipelineResult,
+        pose_mode: PoseMode = "frontal",
+    ) -> CheckResult:
         if not pipeline_result.face_detected or pipeline_result.transformation_matrix is None:
             return CheckResult(
                 passed=False,
@@ -135,27 +156,66 @@ class ConsistencyGate:
                 reason="未偵測到人臉。",
             )
         yaw, pitch, roll = self._euler_from_matrix(pipeline_result.transformation_matrix)
-        tol = self.pose_tolerance_deg
-        passed = abs(yaw) <= tol and abs(pitch) <= tol and abs(roll) <= tol
+
+        if pose_mode == "frontal":
+            tol = self.pose_tolerance_deg
+            passed = abs(yaw) <= tol and abs(pitch) <= tol and abs(roll) <= tol
+            reason = ""
+            if not passed:
+                parts: list[str] = []
+                if abs(yaw) > tol:
+                    parts.append(f"左右偏 {yaw:+.1f}°")
+                if abs(pitch) > tol:
+                    parts.append(f"上下偏 {pitch:+.1f}°")
+                if abs(roll) > tol:
+                    parts.append(f"頭部傾斜 {roll:+.1f}°")
+                reason = (
+                    "頭部姿勢超出容差（"
+                    + "、".join(parts)
+                    + f"，容差 ±{tol:.0f}°），請正對鏡頭重拍。"
+                )
+            return CheckResult(
+                passed=passed,
+                measurement={
+                    "mode": "frontal",
+                    "yaw_deg": round(yaw, 2),
+                    "pitch_deg": round(pitch, 2),
+                    "roll_deg": round(roll, 2),
+                    "tolerance_deg": tol,
+                },
+                reason=reason,
+            )
+
+        # Profile modes: require strong yaw + modest pitch + level roll.
+        yaw_min = self.profile_yaw_min_deg
+        pitch_tol = self.profile_pitch_tolerance_deg
+        roll_tol = self.pose_tolerance_deg
+        side_label = "左" if pose_mode == "profile_left" else "右"
+        yaw_ok = (yaw <= -yaw_min) if pose_mode == "profile_left" else (yaw >= yaw_min)
+        pitch_ok = abs(pitch) <= pitch_tol
+        roll_ok = abs(roll) <= roll_tol
+        passed = yaw_ok and pitch_ok and roll_ok
         reason = ""
         if not passed:
-            parts: list[str] = []
-            if abs(yaw) > tol:
-                parts.append(f"左右偏 {yaw:+.1f}°")
-            if abs(pitch) > tol:
-                parts.append(f"上下偏 {pitch:+.1f}°")
-            if abs(roll) > tol:
-                parts.append(f"頭部傾斜 {roll:+.1f}°")
-            reason = (
-                "頭部姿勢超出容差（" + "、".join(parts) + f"，容差 ±{tol:.0f}°），請正對鏡頭重拍。"
-            )
+            parts = []
+            if not yaw_ok:
+                parts.append(
+                    f"請更明顯地轉向{side_label}側（目前 {yaw:+.1f}°，需 |yaw| ≥ {yaw_min:.0f}°）"
+                )
+            if not pitch_ok:
+                parts.append(f"上下偏 {pitch:+.1f}°（容差 ±{pitch_tol:.0f}°）")
+            if not roll_ok:
+                parts.append(f"頭部傾斜 {roll:+.1f}°（容差 ±{roll_tol:.0f}°）")
+            reason = f"側臉姿勢不正確：{'、'.join(parts)}。"
         return CheckResult(
             passed=passed,
             measurement={
+                "mode": pose_mode,
                 "yaw_deg": round(yaw, 2),
                 "pitch_deg": round(pitch, 2),
                 "roll_deg": round(roll, 2),
-                "tolerance_deg": tol,
+                "yaw_min_deg": yaw_min,
+                "pitch_tolerance_deg": pitch_tol,
             },
             reason=reason,
         )
@@ -203,8 +263,38 @@ class ConsistencyGate:
 
     # -------- Sharpness --------
 
-    def _check_sharpness(self, image_bgr: np.ndarray) -> CheckResult:
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    def _check_sharpness(
+        self,
+        image_bgr: np.ndarray,
+        pipeline_result: CVPipelineResult | None = None,
+    ) -> CheckResult:
+        """Laplacian-variance focus check.
+
+        Restricted to the face bounding box when landmarks are available — on a
+        webcam capture, a flat background (wall / desk) dominates pixel count
+        and dilutes the variance, making a perfectly-sharp face look "blurry".
+        Falls back to the full frame when no landmarks are present (so the
+        offline unit test for blurry-image rejection still works).
+        """
+        crop = image_bgr
+        used_face_crop = False
+        if (
+            pipeline_result is not None
+            and pipeline_result.face_detected
+            and pipeline_result.landmarks_px.size
+        ):
+            pts = pipeline_result.landmarks_px
+            x_min, y_min = pts.min(axis=0)
+            x_max, y_max = pts.max(axis=0)
+            h, w = image_bgr.shape[:2]
+            x1 = max(0, int(x_min))
+            y1 = max(0, int(y_min))
+            x2 = min(w, int(x_max))
+            y2 = min(h, int(y_max))
+            if x2 - x1 >= 32 and y2 - y1 >= 32:
+                crop = image_bgr[y1:y2, x1:x2]
+                used_face_crop = True
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         passed = lap_var >= self.sharpness_min_var
         reason = ""
@@ -218,6 +308,7 @@ class ConsistencyGate:
             measurement={
                 "laplacian_variance": round(lap_var, 2),
                 "threshold": self.sharpness_min_var,
+                "measured_on": "face_crop" if used_face_crop else "full_frame",
             },
             reason=reason,
         )

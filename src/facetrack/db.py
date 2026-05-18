@@ -9,6 +9,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
+from sqlalchemy import text
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine
 
 from facetrack.config import DB_URL
@@ -52,12 +53,20 @@ class Patient(SQLModel, table=True):
 
 
 class Visit(SQLModel, table=True):
-    """A single clinic visit producing one intake photo + quality report + scores."""
+    """A single clinic visit producing one intake photo + quality report + scores.
+
+    `photo_path` is the canonical (frontal) photo used by the scoring engine.
+    `photo_left_path` / `photo_right_path` store the optional side-profile photos
+    captured by the live MediaPipe Face Mesh widget; they are kept for visual
+    record only and not (yet) consumed by the scoring engine.
+    """
 
     id: int | None = Field(default=None, primary_key=True)
     patient_id: int = Field(foreign_key="patient.id", index=True)
     visit_date: date
     photo_path: str = ""
+    photo_left_path: str | None = Field(default=None, nullable=True)
+    photo_right_path: str | None = Field(default=None, nullable=True)
     quality_passed: bool = False
     quality_report_json: str = "{}"
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -99,8 +108,24 @@ engine = create_engine(DB_URL, echo=False, connect_args={"check_same_thread": Fa
 
 
 def init_db() -> None:
-    """Create all tables if not present."""
+    """Create all tables if not present, and add columns introduced after a DB
+    file already exists (SQLite zero-downtime migration for nullable columns)."""
     SQLModel.metadata.create_all(engine)
+    _migrate_add_visit_side_photo_columns()
+
+
+def _migrate_add_visit_side_photo_columns() -> None:
+    """Backfill `photo_left_path` / `photo_right_path` on pre-existing DBs.
+
+    SQLite is forgiving: ADD COLUMN works in O(1) for nullable columns with no
+    default, so this is safe to run on every startup.
+    """
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info('visit')"))}
+        if "photo_left_path" not in cols:
+            conn.execute(text("ALTER TABLE visit ADD COLUMN photo_left_path TEXT"))
+        if "photo_right_path" not in cols:
+            conn.execute(text("ALTER TABLE visit ADD COLUMN photo_right_path TEXT"))
 
 
 def get_session() -> Session:
