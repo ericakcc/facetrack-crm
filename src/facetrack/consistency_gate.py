@@ -5,7 +5,8 @@ this gate. The gate enforces that the photo is comparable to prior visits along
 four dimensions, so that longitudinal scores reflect actual skin change rather
 than camera/setup noise:
 
-    1. POSE       — yaw / pitch / roll within tolerance (default ±8°)
+    1. POSE       — yaw / pitch / roll within tolerance (default ±15° frontal;
+                    profile mode requires |yaw| ≥ 5°, see config.py)
     2. EXPOSURE   — histogram-based over/under-exposure pixel ratio
     3. SHARPNESS  — Laplacian-variance focus check
     4. COLOR      — optional white-balance via ArUco gray-reference marker

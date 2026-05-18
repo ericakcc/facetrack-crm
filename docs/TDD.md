@@ -1,222 +1,97 @@
 # FaceTrack CRM — Technical Design Document
 
-**Author**: Eric Tsou
-**For**: AI Fund Engineer in Residence — Build Challenge
-**Date**: 2026-05-19
-**Companion to**: `docs/PRD.md`
-
----
+**Author**: Eric Tsou  **For**: AI Fund Engineer in Residence — Build Challenge  **Date**: 2026-05-19  **Companion**: `docs/PRD.md`
 
 ## 1. System architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Streamlit UI (繁體中文)                        │
-│  sidebar nav + 5 pages (overview/intake/history/treatment/cfg)   │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       Service layer (Python)                     │
-│                                                                  │
-│   FacePipeline ──▶ ConsistencyGate ──▶ ScoringEngine             │
-│   (alignment +     (pose / exposure /   (5 deterministic         │
-│    ROI extract)     sharpness / color)   CV metrics, 0–10)       │
-│                            │                  │                  │
-│                            ▼                  ▼                  │
-│   Explainer (Mock | Anthropic Claude — translates scores only)   │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│   SQLite (SQLModel)                                              │
-│   patient · visit · region_score · treatment_note                │
-└─────────────────────────────────────────────────────────────────┘
+Streamlit UI (Traditional Chinese)
+  Patients · Intake · History · Treatment · Longitudinal · Settings
+  + live face-mesh capture (in-browser MediaPipe, custom JS component)
+        │
+        ▼
+FacePipeline  ─▶  ConsistencyGate  ─▶  ScoringEngine
+(align +          (pose / exposure /    (5 deterministic
+ 4 ROI masks)      sharpness / color)    CV metrics, 0–10)
+                          │                    │
+                          ▼                    ▼
+Explainer (Mock | Anthropic | Gemini) — receives RegionScores,
+never pixels; auto-fallback to Mock on SDK error.
+        │
+        ▼
+SQLite (SQLModel) · patient · visit · region_score · treatment_note
+zero-downtime ALTER TABLE ADD COLUMN migrations
 ```
 
-The pipeline is strictly one-way: every intake photo flows
-`FacePipeline → ConsistencyGate → ScoringEngine → DB`, with the LLM hanging off
-the side as a presentation-layer convenience.
+Strict one-way flow: `FacePipeline → Gate → Scoring → DB`; the LLM hangs off the side as a presentation-layer convenience.
 
-## 2. Imaging pipeline
+## 2. Imaging pipeline · `src/facetrack/cv_pipeline.py`
 
-`src/facetrack/cv_pipeline.py`
+* **Model**: MediaPipe Face Landmarker (Tasks API, vendored `face_landmarker.task`, 3.6 MB). 478 landmarks + a 4×4 facial-transformation matrix consumed downstream for pose.
+* **Alignment**: rotate around eye-centre by the eye-line angle (indices 33 / 263) so the inter-pupillary line is horizontal; the same affine matrix is applied to the landmarks in homogeneous coordinates so ROI geometry stays in aligned-image space.
+* **ROIs**: four anatomical regions (`LEFT_CHEEK`, `RIGHT_CHEEK`, `FOREHEAD`, `CHIN`) defined as **polygon paths over the aligned landmarks** (forehead = 18 indices, cheeks ≈ 10 each, chin ≈ 12), then rasterised to per-region binary masks. Scoring runs strictly **inside the mask** (`scoring._ratio_inside` / `_stat_inside`), so background pixels — hair, jewellery, clothing — can never contaminate the texture metrics. Polygons were chosen over the original axis-aligned bounding boxes once it became clear that a forehead bbox bleeds into the hairline on most face shapes.
+* **Per-photo CLAHE** on LAB-L of each ROI normalises *within-photo* lighting; *cross-photo* normalisation is the gate's job, not the scorer's.
 
-* **Model**: MediaPipe Face Landmarker (Tasks API, `face_landmarker.task`,
-  3.6 MB, vendored under `src/facetrack/models/`). Returns 478 landmarks plus a
-  4×4 facial-transformation matrix used downstream for pose estimation.
-* **Alignment**: rotate around eye-center by the eye-line angle so the inter-pupillary
-  line is horizontal. The same affine matrix is applied to the landmarks so ROI
-  bounding boxes can be computed in aligned-image coordinates.
-* **ROI extraction**: four anatomical regions (`Region.LEFT_CHEEK`,
-  `RIGHT_CHEEK`, `FOREHEAD`, `CHIN`) defined as fractions of the face bounding
-  box (`face_left/right/top/bot` from indices 234/454/10/152). Bounding-box
-  rather than polygon-mask, deliberately: rectangles are easier to debug and
-  produce contiguous patches for texture metrics.
-* **Per-photo CLAHE** on the L channel of LAB applied to each cropped ROI. This
-  normalizes *within-photo* lighting variation (one side brighter than the
-  other) but does **not** normalize cross-photo variation — that is the gate's
-  job.
-
-## 3. Model reliability and explainability
-
-Every score on the longitudinal chart is produced by a deterministic CV
-function, not by an LLM. `src/facetrack/scoring.py`:
+## 3. Model reliability & explainability · `src/facetrack/scoring.py`
 
 | Score | Formula | Why this choice |
 |---|---|---|
-| Pigmentation | Pixel ratio of `MORPH_BLACKHAT(gray, 15×15)` above 18 | Black-hat highlights small dark structures on brighter background — the morphological signature of melanin spots. |
-| Erythema | Mean of `LAB.a*` over ROI | Standard clinical proxy for redness; a* is independent of luminance after gate calibration. |
-| Wrinkle | Pixel ratio of Sobel magnitude above 30 (post-Gaussian blur) | Edge density is a cheap, isotropic proxy for fine-line content; reproducible across illumination. |
-| Pore | Pixel ratio of Laplacian-of-Gaussian above 0.045 at σ=1.4 | LoG blob detection at pore-sized scale; a textbook isotropic-blob filter. |
-| Uniformity (inverted) | `std(LAB.L)` mapped 0–10 then inverted | Low variance ⇒ uniform tone; the only metric where higher score is better. |
+| Pigmentation | `MORPH_BLACKHAT(gray, 15×15)` pixel ratio > 18 | Black-hat highlights small dark structures — the morphological signature of melanin spots. |
+| Erythema | mean of `LAB.a*` over the ROI mask | Standard clinical proxy; a* is luminance-independent after the gate calibrates colour. |
+| Wrinkle | Sobel-magnitude > 30 pixel ratio (post-Gaussian) | Cheap, isotropic edge-density proxy for fine-line content. |
+| Pore | LoG > 0.045 at σ=1.4, pixel ratio | Textbook isotropic-blob filter at pore-sized scale. |
+| Uniformity (inv.) | `std(LAB.L)` mapped 0–10, inverted | Low variance ⇒ uniform tone. The only metric where higher is better. |
 
-Each raw measurement is linearly clamped against a published constant
-(`PIGMENTATION_RAW_RANGE`, etc.). Re-calibration on a clinic's own
-distribution means editing one tuple, not re-training a model.
+Each raw measurement is linearly clamped against a published constant (`PIGMENTATION_RAW_RANGE`, etc.). **Re-calibrating to a clinic's distribution = editing one tuple, not retraining a model.**
 
-**Reproducibility.** Running the same input twice produces bit-identical
-outputs. There are zero stochastic operations, zero LLM calls, and no
-network I/O in the scoring path. This is the property the longitudinal chart
-depends on, and it is what a typical "score this face with GPT-4o" prototype
-does not have.
-
-The contract is enforced by `tests/test_scoring_determinism.py` (7 tests
-asserting bit-identical outputs across repeated calls and across the full
-`score_visit` aggregation).
-
-**Evidence under mild input perturbation.** Reproducibility on the *same*
-input is trivial when the path is pure. The more interesting question is
-how the scoring behaves when the photo is slightly different across visits
-— the realistic case. `scripts/reproducibility_evidence.py` perturbs one
-face 20 times (rotation ≤1.5°, exposure ±4 %, JPEG re-encode at quality
-82–95) and records the per-metric variance:
+**Reproducibility.** Zero stochastic ops, zero LLM calls, zero network I/O in the scoring path. Same input → bit-identical output, enforced by `tests/test_scoring_determinism.py` (8 tests, including a no-input-mutation guard). Under mild perturbation (rotation ≤ 1.5°, exposure ±4 %, JPEG re-encode q = 82–95; 20 trials on one face), `scripts/reproducibility_evidence.py` yields **σ̄(ours) ≈ 0.074 vs σ̄(stochastic baseline at σ=1.0) ≈ 0.538 — a 7× tighter band** (per-metric: pigmentation 0.103, erythema 0.137, wrinkle 0.000, pore 0.000, uniformity 0.131). That gap is the difference between a longitudinal chart you can act on and one you can't. The right panel uses a *simulated* baseline (no live Vision-LLM credit was available in the 48 hr window); the script is parameterised so swapping in a Claude vision call regenerates it without other changes.
 
 ![reproducibility evidence](figures/reproducibility.png)
 
-The left panel is our CV scoring; the right is a stochastic baseline
-at σ = 1.0 on a 0–10 scale — simulated rather than measured against a
-live Vision-LLM endpoint. The *qualitative* argument is structural and
-does not depend on the sample: any LLM scorer has nonzero output
-variance by construction, whereas the CV path has *zero* variance on
-the same input and bounded variance on perturbed input. Averaged
-across all five metrics, **σ̄(ours) ≈ 0.19 vs σ̄(stochastic) ≈ 0.58 —
-a 3× tighter band**, which is the difference between a longitudinal
-chart you can act on and one you cannot. The script is parameterised:
-setting `ANTHROPIC_API_KEY` and swapping the baseline generator for a
-Claude vision call regenerates the right panel against real data
-without other changes.
+**Explainability.** The score formula *is* the explanation. "Why is pigmentation 7.2?" is answered with a heatmap of the black-hat response — the same intermediate the score is computed from — surfaced directly above the score card (`visualization.py::metric_response_map`). The history page re-uses the same composer behind flat toggles (Streamlit forbids nested expanders), so the doctor↔patient comparison stays interactive across visits.
 
-**Explainability.** The score formula is the explanation. A physician
-asking "why is the pigmentation score 7.2 ?" can be answered with a
-heatmap of the black-hat response — the same intermediate the score is
-computed from. The intake page surfaces this heatmap directly above the
-score card (`src/facetrack/visualization.py:metric_response_map`); what
-the clinician sees is what the scorer computed on.
+**Scores-only contract — the structural anti-"thin-wrapper" guard.** The `Explainer` Protocol accepts a `RegionScores` dataclass + a short patient-context string — **never pixels, never the image path, never the QualityReport**. The factory `get_explainer()` resolves Anthropic / Gemini / Mock by the `LLM_BACKEND` env var or auto-selects (Anthropic → Gemini → Mock) based on which keys are present; both real backends `try/except` to `MockExplainer` on SDK error, so the demo never hard-fails. Because the contract is *structural* (the Protocol's `explain()` signature has no `image` parameter), no code path lets the LLM synthesise a numeric score — even if a future contributor wanted it to. **Extensibility**: each scoring function is `bgr → float`; a new procedure-specific metric (volume change for filler, vascularity for rosacea) is one function plus one aggregator entry. No retraining, no schema migration. PRD §5's "next procedure" is a plug-in, not a rewrite.
 
-**Extensibility — why this is procedure-agnostic.** The five scoring
-functions in `scoring.py` are independent module-level functions sharing
-one signature (`bgr → float`), aggregated by `score_region`. Adding a new
-procedure-specific metric — volume change for filler, vascularity index
-for rosacea — is a new function plus one entry in the aggregator. No
-model retraining, no pipeline change, no schema migration (`RegionScore`
-columns are float and procedure-neutral). The MVP elevates pigmentation
-as the hero metric for 皮秒雷射淡斑追蹤; the other four are scaffolding
-for the next procedures (肝斑、痘疤、紅血絲). This is the property that
-makes the "one wedge, then the next 醫美 procedure" path in PRD §5 a
-plug-in operation, not a rewrite.
-
-## 4. Photo-consistency controls — the depth area
-
-`src/facetrack/consistency_gate.py`
+## 4. Photo-Consistency Gate — the depth area · `consistency_gate.py`
 
 Four checks gate every intake photo before scoring:
 
-1. **Pose.** Decompose MediaPipe's 4×4 facial-transformation matrix into yaw /
-   pitch / roll via the ZYX Euler convention. Reject if any axis exceeds
-   `POSE_TOLERANCE_DEG` (default ±8°). The transformation matrix is a more
-   accurate pose source than landmark triangulation because it incorporates
-   the model's own 3D head pose estimation.
-2. **Exposure.** Compute fraction of pixels < 10 (underexposed) and > 245
-   (overexposed) on grayscale. Reject if either exceeds 2 % OR if mean
-   brightness is < 60 / > 210.
-3. **Sharpness.** Laplacian variance on grayscale; reject if below 80.
-4. **Color calibration.** Detect ArUco 5×5 markers (`DICT_5X5_50`); if a
-   marker is present, sample the printed gray surround, compute per-channel
-   gains to neutralize white balance, apply to the full image. If no marker is
-   present, this check emits a warning rather than a hard reject — many clinics
-   will adopt the calibration card progressively, so we degrade gracefully.
+1. **Pose.** Decompose MediaPipe's 4×4 facial-transformation matrix into yaw / pitch / roll (ZYX Euler). Reject if any axis exceeds `POSE_TOLERANCE_DEG = ±15°` in frontal mode; profile mode uses `PROFILE_YAW_MIN_DEG = 5°` for side captures. The threshold was relaxed from a DSLR-tuned ±8° once live webcam capture went in — natural laptop-camera tilt puts roll at –8° to –10°, so ±8° was unreachable without forcing unnatural, rigid intake photos (see BUILD_NOTES).
+2. **Exposure.** Fraction of grayscale pixels < 10 (under) and > 245 (over). Reject if either > 2 % or mean brightness < 60 / > 210.
+3. **Sharpness.** Laplacian variance on the **face-bbox crop** (full-frame fallback when no landmarks are detected, so the offline blur regression test still trips); reject if < `SHARPNESS_MIN_LAPLACIAN_VAR = 30`. Lowered from a DSLR-tuned 80 once Mac-webcam JPEGs were measured — well-lit frames land at 15–20 on the full frame, 35–80 on the face crop. The blurry-image regression test (`GaussianBlur(51, 25)`) still trips at the new floor.
+4. **Color calibration.** Detect ArUco 5×5 markers (`DICT_5X5_50`); if present, sample the printed gray surround, compute per-channel gains, apply to the full image. If absent, **warn rather than hard-reject** — clinics adopt the calibration card progressively, so we degrade gracefully.
 
-Failure modes produce actionable 繁中 reasons
-(`"頭部右偏 12.3°, 容差 ±8°, 請正對鏡頭"`), surfaced to the receptionist in
-the intake UI. The full `QualityReport` is JSON-serialized to the `Visit`
-row so an audit trail exists.
+Failures yield actionable reasons (rendered to the receptionist in Traditional Chinese in the UI; the English equivalent here is *"head turned 18.4° right; tolerance ±15°; please face the camera"*); the full `QualityReport` is JSON-serialised onto the `Visit` row for audit. **Live-capture variant** (Session 2): a custom Streamlit component runs the same model **in the browser** via the Tasks Vision Web SDK and auto-captures only when all four checks pass for `LIVE_CAPTURE_STABILITY_FRAMES = 10` consecutive frames — converting the gate from "reject after the fact" to "guide in real time". Face-fill is bounded to `[0.35, 0.75]` of frame width so pore / wrinkle metrics have enough pixels without clipping the chin. **The server-side gate still re-runs on the captured frame** — the browser HUD is a UX accelerator, not a security boundary.
 
 ## 5. Workflow integration
 
-* **Streamlit** chosen over a React+FastAPI split because the build-challenge
-  deliverable is a 48-hour prototype, not a production system. Streamlit gives
-  the entire UI in a single file, can be deployed to Streamlit Cloud in one
-  click, and is the right tool for "show a CV pipeline" demos. Switching to
-  React+FastAPI is a 1-week refactor, deferred.
-* **SQLModel** because it is the same `BaseModel` API the rest of the codebase
-  uses for type-validated dataclasses, and it produces a single SQLite file we
-  can ship in the repo for the panel review.
-* **State** lives on disk (SQLite + photo blobs under `data/photos/`), so
-  restarting the Streamlit process loses no data. No Redis, no background
-  workers, no message queues — the entire pipeline runs synchronously in the
-  request thread because the slowest stage (MediaPipe inference) is < 200 ms
-  on Apple Silicon.
+**Three-actor flow**: receptionist captures (live or upload) → server-side gate runs → on pass, 5 metrics × 4 ROIs + LLM draft are produced → physician (sitting next to the receptionist) reviews the visit-history page with the ROI overlay toggle, edits the treatment-plan draft, saves → longitudinal page updates. The patient sees the heatmap + explanation on-screen during the consult.
 
-## 6. Tech stack, deployment, cost / latency
+**Streamlit pages** (6, sidebar nav defined in `app.py::PAGE_LABELS`):
 
-* Python 3.11 (mediapipe 0.10 still has spotty 3.12 support on macOS arm64)
-* uv for dependency management — fast, lock-file-pinned, no `pip` in this repo
-* mediapipe 0.10.35 / opencv-python-headless / sqlmodel / streamlit / plotly
-* `anthropic` Python SDK for the optional Claude backend
-* Deployment target: Streamlit Community Cloud (free tier), GitHub-linked
+| Key | Label (UI) | Owns |
+|---|---|---|
+| `patients` | Patient management | CRUD + soft-delete + restore |
+| `intake` | New visit | Live face-mesh capture + upload fallback + gate + scoring + LLM draft + save |
+| `history` | Visit history | Per-visit timeline + ROI overlay toggles + CLAHE thumbnails |
+| `treatment` | Treatment plan | Editable plan tied to the latest visit |
+| `overview` | Longitudinal tracking | Radar chart (current) + line chart (all visits × 5 metrics) |
+| `settings` | Settings | Gate thresholds, LLM backend status, audit toggles |
 
-**Measured latency** (M4 Pro, 3 test faces × 5 runs, see `scripts/benchmark.py`):
+**Stack rationale.** Streamlit (single-file UI, one-click Cloud deploy — the right tool for a 48 hr CV-pipeline demo; React + FastAPI is a 1-week refactor, deferred). Where Streamlit was too restrictive (no nested expanders, no client-side ML) we dropped to a `declare_component` widget for live capture — the Python side just consumes `{front, left?, right?}` and the rest of the pipeline is unchanged. SQLModel (same `BaseModel` API as the rest of the codebase; single SQLite file ships in the repo). Migrations are zero-downtime `ALTER TABLE ADD COLUMN`. State lives on disk — no Redis, no workers, no queues — the entire pipeline runs synchronously in the request thread because the slowest stage (MediaPipe) is < 200 ms on Apple Silicon. History-view hot paths use `@st.cache_data` keyed on `(path, mtime)` so toggling the ROI overlay does not re-run MediaPipe.
+
+## 6. Stack, cost, latency · `scripts/benchmark.py` (M4 Pro, 3 faces × 5 runs)
 
 | Stage | p50 | p95 |
 |---|---:|---:|
-| Alignment + ROI extraction (MediaPipe Tasks API) | 7.0 ms | 7.5 ms |
+| Alignment + ROI extraction (MediaPipe Tasks) | 7.0 ms | 7.5 ms |
 | Consistency Gate (4 checks + ArUco) | 8.1 ms | 8.5 ms |
-| Scoring (5 CV metrics × 4 ROIs) | 2.2 ms | 2.5 ms |
+| Scoring (5 metrics × 4 ROIs) | 2.2 ms | 2.5 ms |
 | **End-to-end (excl. LLM)** | **17.2 ms** | **18.1 ms** |
 | Explainer (Claude Sonnet 4.6, network) | ~1.5 s | ~2.5 s |
 
-Per-visit Claude cost at current Sonnet 4.6 pricing (~$3 / Mtok in, $15 / Mtok
-out) is ~600 input tokens + ~200 output tokens ≈ **\$0.0048 / visit**.
-A 1 000-visit/month clinic costs ~\$5/month in inference — i.e. the LLM is
-a rounding error compared to the human time it saves drafting the
-treatment note.
+Python 3.11 (mediapipe 0.10 has spotty 3.12 wheels on macOS arm64). uv-managed deps, ruff-formatted, pytest-tested (56 tests across 7 files). `anthropic` + `google-genai` SDKs are optional; absent both, the app runs against `MockExplainer` and the loop still works end-to-end. Per-visit LLM cost at Sonnet 4.6 pricing ≈ **\$0.0048 / visit** (~600 in + ~200 out tokens); 1 000 visits / month ≈ **\$5 / month** — a rounding error vs. the human time saved drafting the treatment note.
 
-## 7. Known limitations / future hardening
+## 7. Limitations · full catalogue in [`docs/LIMITATIONS.md`](./LIMITATIONS.md)
 
-A summary; the full failure-mode catalogue with concrete Phase-2 plans is in
-[`docs/LIMITATIONS.md`](./LIMITATIONS.md).
-
-1. **Empirical scoring ranges** are calibrated on three reference photos; a
-   real pilot would re-fit on ~200 clinic images per Fitzpatrick skin type.
-2. **No identity confirmation** — the system trusts that the receptionist
-   selected the right patient before upload. Phase 2: face-embedding
-   verification against the patient's first-visit photo.
-3. **ArUco card adoption is voluntary**, which means color calibration is
-   best-effort. Phase 2: small printable card distributed with every
-   onboarding pack + a marker-required clinic setting.
-4. **No HIPAA / PIPL story** — patient photos are in clear on disk. Phase 2
-   needs at-rest encryption and a deletion API.
-5. **Skin-surface visibility is not validated** — heavy makeup, partial
-   occlusion, and smartphone beauty filters can pass every gate check and
-   still produce misleading scores. See `LIMITATIONS.md` §1, §2, §5.
-
-## 8. What was reused vs. built
-
-| Reused | Built |
-|---|---|
-| MediaPipe Face Landmarker model | Alignment + ROI extraction code |
-| OpenCV CLAHE, ArUco, morphology | All five scoring formulas + calibration ranges |
-| Streamlit / Plotly / SQLModel | Photo-Consistency Gate (all four checks) |
-| Anthropic SDK | Explainer interface + mock backend + JSON-output prompt |
-| `thispersondoesnotexist.com` for 3 CC0 test faces | Seed-data trajectory generator, UI, DB schema |
+Scoring ranges are calibrated on 3 reference photos (a real pilot would re-fit on ~200 per Fitzpatrick type). No identity confirmation on intake (Phase 2: face-embedding vs. the patient's first-visit photo). ArUco card adoption is voluntary (Phase 2: required-marker clinic setting). No HIPAA / PIPL story — photos sit in clear on disk (Phase 2: at-rest encryption + a deletion API). Skin-surface visibility is not validated: heavy makeup, partial occlusion, and smartphone beauty filters can pass every gate check and still produce misleading scores. **What was reused vs. built** is documented in `docs/BUILD_NOTES.md` per the brief.

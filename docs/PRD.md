@@ -1,137 +1,50 @@
 # FaceTrack CRM — Product Requirements Document
 
-**Author**: Eric Tsou
-**For**: AI Fund Engineer in Residence — Build Challenge
-**Date**: 2026-05-19
-**Status**: MVP prototype, panel review
+**Author**: Eric Tsou  **For**: AI Fund Engineer in Residence — Build Challenge  **Date**: 2026-05-19  **Companion**: `docs/TDD.md`
 
----
+## 1. The problem & the wedge
 
-## 1. The problem
+Taiwan's medical-aesthetic clinics run a multi-billion-NTD industry on paper consent forms, three-ring binders of "before / after" photos, and the receptionist's iPhone. The single most common procedure — a **pico-laser pigmentation course** — is 4–6 sessions at NTD 6–8 K each (≈ USD 200 / session) over 3–6 months, and the only signal patients get back between visits is the physician's eyeballed *"a little better"* vs *"about the same"*. Whether session #2 actually worked, or whether the patient just wants it to have worked, is unanswerable. Photos are shot ad-hoc under whatever ceiling light is on; the same patient at visit #3 looks different from visit #1 because the *camera setup* changed, not the skin. Dermal-scoring hardware (VISIA, Observ520) exists but costs USD 25 k+ and lives on a dedicated station — only the top 5 % of clinics have one. The other 95 % run pico-laser courses with no numeric "is this working?" feedback loop.
 
-Taiwan's medical-aesthetic clinics (醫美診所) run a multi-billion-NTD industry on
-WhatsApp, paper consent forms, and three-ring binders of "before / after" photos.
-The single most common procedure — **皮秒雷射淡斑 / 淨膚** — is also the worst
-served by this status quo:
-
-* **A pico-laser course is 4–6 sessions across 3–6 months.** Patients pay
-  NTD 6–8 K per session and the only signal they get back is the physician's
-  eyeballed "有比較好" / "差不多" between visits. Whether session #2 actually
-  worked, or whether the patient just wants it to have worked, is unanswerable.
-* **No standard intake photo workflow.** Photos are shot ad-hoc, on the
-  receptionist's iPhone, under whatever ceiling light happens to be on. The
-  same patient at visit #3 looks objectively different from visit #1 because
-  the *camera setup* changed, not the skin.
-* **No quantified pigmentation baseline.** Dermal scoring tools exist (VISIA,
-  Observ520) but cost USD 25 k+ and live on dedicated hardware — only the top
-  5 % of clinics have one. The other 95 % run pico-laser courses with no
-  numeric "is this working?" feedback loop.
-* **No longitudinal record that survives clinician churn.** When the founding
-  doctor leaves for a competitor, so does the institutional memory of "how this
-  patient responded to last summer's pico laser course."
-
-The wedge is a tablet-friendly intake flow + a longitudinal skin chart that
-the front-desk staff can run in 60 seconds, on any smartphone, with no special
-hardware — anchored on the metric that matters for pico: **quantified
-pigmentation across the course**.
+**The wedge is the AI-native CRM entry point for the clinic** — a tablet-friendly intake flow plus a longitudinal skin chart that the front-desk staff runs in 60 seconds on any smartphone, no special hardware, anchored on the metric that matters for pico: **quantified pigmentation across the course**. The intake event is the only moment in the clinic day when every patient is in front of a camera with their face squared up; owning that moment is what makes the longitudinal skin record defensible, and the longitudinal skin record is what turns a CRM from "appointments + chat history" into a clinical decision-support surface. **This submission demonstrates the engine on pico-laser pigmentation tracking** as the hero procedure; the engine itself is procedure-agnostic (TDD §3).
 
 ## 2. Target user
 
-| User | Role | What they need from the product |
+| User | Role | What they need |
 |---|---|---|
-| **Reception nurse** (primary) | Greets patient, captures intake photo | Idiot-proof flow that *refuses* to save a bad photo, so they don't get blamed for skewed scores later. |
-| **Clinic physician** (decision-maker) | Sees patient for 5–8 minutes per consult | An at-a-glance chart that says "is this patient actually improving?" + an editable treatment-plan draft they can override. |
-| **Clinic owner** (buyer) | Runs P&L; reviews retention | Outcome trends across patient cohorts, so they know which treatments to upsell. |
+| **Reception nurse** (primary) | Greets patient, captures intake photo | An idiot-proof flow that *refuses* to save a bad photo, so they don't get blamed for skewed scores later. |
+| **Clinic physician** (decision-maker) | 5–8 min per consult | An at-a-glance "is this patient actually improving?" chart, plus an editable treatment-plan draft they can override. |
+| **Clinic owner** (buyer) | P&L, retention | Outcome trends across cohorts — which treatments to upsell, which to retire. |
 
-In Taiwan specifically, the receptionist is overwhelmingly female, in her
-twenties, comfortable with LINE-style UIs, and speaks no English. The product
-must be 繁體中文 first-class, not localized as an afterthought.
+In Taiwan, the receptionist is overwhelmingly female, twenties, fluent in messaging-app UIs but not English. The product must be **Traditional Chinese first-class**, not localised as an afterthought.
 
-## 3. Workflow that the prototype demonstrates
+## 3. Workflow the prototype demonstrates
 
-**Target workflow**: 皮秒雷射療程追蹤. Visit #1 establishes the pigmentation
-baseline; visits #2–6 (each ~4 weeks apart) are compared against it to answer
-"is this course actually working?" The same flow generalises to other 醫美
-procedures (see §5), but pico is the MVP target.
-
-1. **Patient check-in** — receptionist selects the patient in the sidebar.
-2. **Intake photo** — receptionist drags a smartphone photo into "📸 新增就診".
-3. **Photo-Consistency Gate** runs *before* anything else:
-   * If the photo fails (head turned, over-exposed, blurry, no calibration card),
-     the system rejects it with a 繁中 reason — the receptionist re-shoots.
-   * **The gate is the product's most important property.** It is what prevents
-     longitudinal scores from being garbage.
-4. **CV pipeline** aligns the face, extracts 4 ROIs (left/right cheek, forehead,
-   chin), applies CLAHE.
-5. **Scoring engine** computes 5 deterministic skin metrics per ROI.
-6. **AI explainer** drafts a 繁中 explanation + treatment suggestion, which the
-   physician sees and edits before saving.
-7. **Longitudinal view** updates the radar chart + line chart automatically.
+1. **Check-in** — receptionist picks the patient in the sidebar.
+2. **Intake photo** — on the "New visit" page: live face-mesh capture (auto-fires when pose / face-fill / stability all pass) **or** an upload fallback.
+3. **Photo-Consistency Gate** runs *before* anything else. Failing photos are rejected with a concrete reason ("head turned 18° right; please face the camera") and the receptionist re-shoots. **This is the product's most important property** — without it, the longitudinal scores are garbage.
+4. **CV pipeline** aligns the face, extracts four ROIs (left/right cheek, forehead, chin) as polygon masks, applies per-photo CLAHE.
+5. **Scoring engine** computes five deterministic skin metrics per ROI; identical photo → identical score.
+6. **LLM explainer** drafts an explanation + treatment suggestion in Traditional Chinese. **The physician edits everything before saving** — every AI output is a draft, never a verdict.
+7. **Longitudinal view** updates the radar + line chart automatically.
 
 ## 4. Why this approach fits clinic operations
 
-Three product decisions are non-obvious and deliberate:
+Three non-obvious decisions:
 
-1. **Reject bad photos at intake, not later.** Most "AI for medical imaging"
-   products silently accept garbage and produce confident-looking outputs. In a
-   clinic, that erodes trust the first time a clinician notices the score moved
-   while the patient hadn't been treated. We make the gate visible and audible.
-
-2. **CV scores are deterministic; the LLM is decorative.** The number on the
-   chart comes from a fixed formula (e.g., black-hat morphology pixel ratio →
-   pigmentation). Re-running on the same photo gives the same number, every
-   time. The LLM only translates the numbers into 繁中 prose and a draft
-   treatment plan, both of which the physician can edit. This makes the system
-   defensible if a patient or regulator asks "how did you get this number?"
-
-3. **Editable AI output.** Every AI suggestion is a draft, never a verdict.
-   The physician's edits are stored alongside the AI output. This is the only
-   pattern clinics will buy — they will not accept a system that overwrites their
-   judgement.
+1. **Reject bad photos at intake, not later.** Most "AI for medical imaging" silently accepts garbage and emits confident-looking output. In a clinic that erodes trust the first time a clinician notices the score moved while the patient wasn't treated. We make the gate visible and audible *at the moment of capture*.
+2. **CV scores are deterministic; the LLM is decorative.** The number on the chart comes from a fixed formula (black-hat morphology pixel ratio → pigmentation). Re-run on the same photo → same number, to the last decimal. The LLM only translates numbers into prose + a draft plan. The system is defensible when a patient or a regulator asks "how did you get this number?"
+3. **Editable AI output, always.** The physician's edits are stored alongside the AI draft. Clinics will not buy a system that overwrites their judgement.
 
 ## 5. Wedge → platform path
 
-* **Wedge (this prototype, ~5 clinics in pilot).** Single-procedure focus:
-  皮秒雷射淡斑追蹤. Streamlit app, intake + Photo-Consistency Gate +
-  deterministic pigmentation scoring + longitudinal chart + editable
-  treatment notes. One procedure, one hero metric, one clean demo loop.
-* **Phase 2 (extend to other 醫美 procedures, 6 months).** The same
-  three-stage pipeline — ConsistencyGate → deterministic CV ScoringEngine →
-  scores-only LLM Explainer — accepts new procedures by registering new
-  metric functions. Concrete next-up procedures:
-  - **肝斑治療** — pigmentation metric reused, chronic-course visualization
-    (months → years).
-  - **痘疤治療**（雷射磨皮 / 微針）— pore + wrinkle + uniformity metric
-    bundle for textural recovery.
-  - **紅血絲 / 酒糟治療**（脈衝光 / IPL）— erythema metric (LAB a*) as hero.
-  Each new procedure is a metric registration + a clinic-specific raw-range
-  calibration tuple — not a pipeline rewrite.
-* **Phase 3 (multi-clinic SaaS, 12 months).** Patient consent, photo-history
-  vault, appointment integration, LINE Pay billing. Multi-procedure
-  longitudinal record per patient.
-* **Phase 4 (outcome-tracking moat, 18–24 months).** Once enough procedures
-  and clinics report into the system, "which laser settings correlate with
-  the largest pigmentation drop across the cohort" becomes answerable —
-  anonymized aggregate insights become the data moat and the basis for a
-  skin-data exchange across Greater China medical aesthetics.
+* **Wedge** (this prototype, ~5 pilot clinics) — single-procedure focus: pico-laser pigmentation tracking. One procedure, one hero metric, one clean demo loop.
+* **Phase 2** (6 mo, more aesthetic procedures) — the same three-stage pipeline (`ConsistencyGate → ScoringEngine → scores-only Explainer`) accepts new procedures by **registering a metric function**, not rewriting the pipeline. Next up: **melasma** (pigmentation metric reused, chronic-course visualisation over months → years), **acne scars** (pore + wrinkle + uniformity bundle for textural recovery via laser resurfacing or microneedling), **vascular redness / rosacea** (LAB `a*` channel as the hero metric, treated via IPL).
+* **Phase 3** (12 mo, multi-clinic SaaS) — patient consent, photo-history vault, appointment integration, LINE Pay billing. **Competitive positioning**: the CRMs Taiwanese aesthetic clinics already pay for (LINE Official Account CRM, hospital-style ERPs, appointment SaaS) own the booking and message-history surfaces but **none owns a quantified skin record** — because none runs a CV pipeline at intake. They can layer appointments onto a record they don't own; we own the record and layer appointments later. The CV pipeline is the moat. Appointments are commodity.
+* **Phase 4** (18–24 mo, outcome-tracking moat) — once enough procedures × clinics report into the system, "which laser settings correlate with the largest pigmentation drop across the cohort" becomes answerable. Anonymised aggregate outcomes become the data flywheel and the basis for a skin-data exchange across Greater China aesthetic medicine.
 
-## 6. Out of scope for this prototype
+## 6. Out of scope & success criterion
 
-* Patient self-service / mobile app
-* Payment / billing integration
-* HIPAA / PIPL compliance hardening (data stays on-device for the demo)
-* Hardware-paired imaging (we accept *any* smartphone photo, then gate it —
-  that is the whole point)
+**Out of scope for this prototype**: patient self-service, payment, HIPAA / PIPL hardening, hardware-paired imaging. We accept *any* smartphone photo and gate it — that is the whole point.
 
-## 7. Success metric for the panel review
-
-The reviewer should be able to:
-
-1. Upload a face photo and see the **Photo-Consistency Gate reject it** for a
-   concrete reason.
-2. Upload a better photo, watch the system produce **the same scores** if they
-   upload it twice.
-3. See the **longitudinal chart update** with the new visit.
-4. **Edit the AI treatment draft** and save the edit.
-
-All four flows are wired and demonstrable in the live app.
+**Panel success**: a reviewer can (a) upload a face photo and see the **gate reject it** with a concrete reason; (b) upload a better photo and see **identical scores on a repeat upload**; (c) watch the **longitudinal chart update** with the new visit; (d) **edit the AI treatment draft** and save the edit. All four are wired in the live app.

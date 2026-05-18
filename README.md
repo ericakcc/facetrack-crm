@@ -13,6 +13,13 @@ Gate** that rejects low-quality intakes before they contaminate the patient's
 longitudinal record. **本次 build challenge 提交版本以皮秒雷射淡斑療程追蹤為示範**
 （4–6 次療程、色素沉澱為主訊號）；引擎本身是 procedure-agnostic（見 TDD §3）。
 
+The intake page runs a **live face-mesh capture widget**: MediaPipe Tasks
+Vision Web SDK loads in the browser, draws the 478-point mesh + tessellation
+on the live camera feed, and only auto-captures when pose / face-fill /
+stability all pass simultaneously. The same `ConsistencyGate` then re-runs
+server-side on the captured frame — the browser HUD is a UX accelerator,
+not a security boundary.
+
 ## The product thesis (read this first)
 
 Three decisions separate this prototype from "yet another Vision-LLM wrapper":
@@ -24,14 +31,16 @@ Three decisions separate this prototype from "yet another Vision-LLM wrapper":
    meaningful longitudinal chart.
 
 2. **A Photo-Consistency Gate rejects bad intakes _before_ they reach scoring.**
-   This is the prototype's depth area. Four checks: pose (yaw/pitch/roll ±8°),
-   exposure (over/under), sharpness (Laplacian variance), and color (ArUco
-   gray-card white balance). A failed photo is rejected with a 繁中 reason
-   ("頭部右偏 12°，請正對鏡頭"). The chart never compares apples to oranges.
+   This is the prototype's depth area. Four checks: pose (yaw/pitch/roll ±15°
+   frontal, ±5° profile), exposure (over/under), sharpness (Laplacian variance
+   on the face-bbox crop), and color (ArUco gray-card white balance). A failed
+   photo is rejected with a 繁中 reason ("頭部右偏 18°，請正對鏡頭"). The
+   chart never compares apples to oranges.
 
-3. **The LLM is the final layer, not the engine.** Claude is wired in for
-   translating numeric scores into natural 繁中 explanations and drafting an
-   editable treatment plan. The clinician edits everything before saving.
+3. **The LLM is the final layer, not the engine.** Either Anthropic Claude
+   or Google Gemini drafts the 繁中 explanation + editable treatment plan
+   (auto-fallback to a deterministic `MockExplainer` if no key is set or
+   the SDK errors). The clinician edits everything before saving.
 
 ## Why this is not an LLM wrapper
 
@@ -69,12 +78,23 @@ run. Try the **新增就診** page with any frontal portrait — the consistency
 gate will reject under-/over-exposed photos with a concrete 繁中 reason, then
 the scoring engine produces deterministic 0-10 metrics on what passes.
 
-To swap the mock explainer for the real Claude backend:
+To swap the mock explainer for a real backend, set **either** key:
 
 ```bash
+# Option A: Anthropic Claude (preferred when both are set)
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# Option B: Google Gemini (auto-selected if Anthropic key absent)
+export GEMINI_API_KEY=...
+
+# Override resolution explicitly:
+export LLM_BACKEND=anthropic   # or 'gemini' or 'mock'
+
 uv run streamlit run app.py
 ```
+
+Both backends fall back to the deterministic `MockExplainer` on any SDK
+error, so the demo never hard-fails on a flaky upstream.
 
 ## Deployment
 
@@ -83,8 +103,10 @@ The repo is ready for **Streamlit Community Cloud**:
 1. Push to GitHub (public repo).
 2. <https://share.streamlit.io> → "New app" → pick this repo, branch `main`,
    main file `app.py`. Python version is pinned via `runtime.txt`.
-3. Optional: set `ANTHROPIC_API_KEY` under "App settings → Secrets" to enable
-   real Claude explanations.
+3. Optional: set `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` under
+   "App settings → Secrets" to enable real LLM explanations. With neither
+   key set, the app runs against `MockExplainer` and the demo loop still
+   works end-to-end.
 
 `requirements.txt` is committed alongside `pyproject.toml` for compatibility
 with deployment platforms that don't yet parse PEP-735 dependency groups.
@@ -98,9 +120,13 @@ facetrack-crm/
 │   ├── cv_pipeline.py              # MediaPipe Face Landmarker (Tasks API) + ROI
 │   ├── consistency_gate.py         # ⭐ Photo-Consistency Gate — depth area
 │   ├── scoring.py                  # Five deterministic CV metrics, 0–10
-│   ├── llm_explainer.py            # Mock + Anthropic Claude adapter
-│   ├── db.py                       # SQLModel schemas
+│   ├── score_display.py            # Score → health-band UI helpers
+│   ├── llm_explainer.py            # Mock + Anthropic + Gemini adapters (auto-fallback)
+│   ├── patient_service.py          # Patient CRUD + soft-delete
+│   ├── visualization.py            # ROI heatmap + 4-crop CLAHE composer
+│   ├── db.py                       # SQLModel schemas (zero-downtime ALTER migrations)
 │   ├── seed.py                     # 3 demo patients × 3 visits trajectory
+│   ├── components/face_capture/    # In-browser live face-mesh capture widget
 │   └── models/face_landmarker.task # MediaPipe model (3.6 MB, vendored)
 ├── data/
 │   ├── facetrack.db                # SQLite (gitignored)
@@ -111,7 +137,6 @@ facetrack-crm/
 │   ├── TDD.md                      # Technical design (1-2 pages)
 │   ├── BUILD_NOTES.md              # Authorship / debugging note
 │   ├── LIMITATIONS.md              # Honest failure-mode catalogue + Phase-2 plan
-│   ├── DEMO_STORYBOARD.md          # Scene-by-scene demo recording script
 │   └── figures/reproducibility.png # Determinism evidence (embedded in TDD §3)
 ├── scripts/
 │   └── generate_demo_photos.py     # Nano Banana Pro longitudinal photo gen
@@ -121,22 +146,21 @@ facetrack-crm/
 └── runtime.txt                     # python-3.11 for Streamlit Cloud
 ```
 
-## Demo recipe for the panel video
+## Smoke test for reviewers
 
-The 2-5 minute demo should hit these beats in order:
+Five things should be reachable in the live app:
 
-1. **Open the app**, select 林雅婷 (皮秒雷射 session 3 患者), show the
-   **縱向追蹤** radar + line chart — the existing seed data demonstrates a
-   downward pigmentation trend across her course.
-2. Switch to **新增就診**. Upload `data/test_images/test_face_1.jpg`. The
-   Photo-Consistency Gate **rejects** it (underexposed) with a 繁中 reason.
-   Upload `test_face_3.jpg`. **Rejected** (overexposed).
-3. Upload `test_face_2.jpg`. **Passes.** Show the four ROI crops, then the
-   five deterministic 0–10 scores, then the editable treatment-plan draft.
-4. Click **儲存到病患歷史**, switch back to **縱向追蹤**, show the chart
-   updated with the new visit.
-5. (Optional) `export ANTHROPIC_API_KEY=...` and re-run to show the explainer
-   swap from mock to Claude with no other code change.
+1. **`📈 縱向追蹤`** — pick 林雅婷 (皮秒雷射 session 3 患者); seeded with a
+   downward pigmentation trajectory.
+2. **`📸 新增就診` → live capture tab** — face-mesh + HUD draws live;
+   auto-capture fires only when pose / face-fill / stability all pass.
+3. **`📸 新增就診` → upload fallback** — drag `data/test_images/test_face_1.jpg`
+   (underexposed) → gate rejects with a 繁中 reason; drag `test_face_2.jpg`
+   → passes → 5 scores + 4 ROI heatmaps + LLM treatment draft.
+4. **`📋 就診歷史`** — toggle "🔬 顯示 ROI 訊號疊圖" and "🧪 顯示各 ROI 局部影像"
+   to compare across visits.
+5. **Reproducibility** — re-upload the same passing photo twice; scores match
+   to the last decimal (the contract enforced by `tests/test_scoring_determinism.py`).
 
 That sequence makes the depth area (Photo-Consistency) **visible in product
 evidence**, satisfying the panel's "depth area must be in the product, not

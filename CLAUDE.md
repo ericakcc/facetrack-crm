@@ -45,12 +45,11 @@ It is the **AI Fund Engineer in Residence Build Challenge** submission.
 | `docs/BUILD_NOTES.md` | What Eric built vs. reused, what broke, debug story | AI Fund panel |
 | `README.md` | Repo front door, quickstart, tech overview | GitHub visitors |
 | **this file** | Agent handoff: status, open work, inconsistencies, non-negotiables | Agents only |
-| `docs/DEMO_STORYBOARD.md` | Scene-by-scene script for the 2–5 min Loom demo | Eric (recording) |
 | `docs/figures/reproducibility.png` | The evidence chart embedded in TDD §3 | AI Fund panel |
 | `scripts/reproducibility_evidence.py` | Regenerates the reproducibility chart | Agents + Eric |
 | `scripts/benchmark.py` | Re-measures end-to-end pipeline latency | Agents + Eric |
 | `docs/LIMITATIONS.md` | 6 failure modes + concrete Phase-2 mitigations | AI Fund panel |
-| `docs/SUBMISSION_EMAIL.md` | Fill-in-the-blanks final email to Mike | Eric |
+| `docs/PRD.pdf` / `docs/TDD.pdf` | PDF renders of the panel docs (regenerate via `scripts/build_docs_pdf.sh`) | AI Fund panel |
 
 ## 4. Architecture in one diagram
 

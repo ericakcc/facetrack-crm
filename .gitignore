@@ -44,3 +44,6 @@ src/facetrack/components/face_capture/frontend/face_landmarker.task
 .coverage
 htmlcov/
 coverage.xml
+
+# Build artefacts for docs PDF pipeline (pandoc HTML + CSS, regenerated each run)
+.docs-pdf-build/
