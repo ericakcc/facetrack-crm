@@ -285,19 +285,21 @@ demo look smooth) is the worse signal.
 
 ## 8. What I'd do next (in priority order)
 
-1. **Pilot pricing experiment with 2 clinics.** Set a price (initial
-   guess: NTD 6,000 / month / chair, billable as part of the consult
-   fee), get two clinics to run it for one month against their
-   existing intake workflow, measure whether receptionists actually
-   use the longitudinal chart in the patient conversation. This is the
-   single most informative experiment before any further feature work.
-2. **Replace linear-clamp with per-cohort percentile** *once the
-   pilot's data is in hand*, not before — otherwise the cohort is fake.
-3. **Wire `nano-banana-pro` to generate same-identity before/mid/after
-   triptychs.** Today's longitudinal demo uses three different test
-   faces from TPDNE. A single-identity progression would make the
-   "tracks across visits" story land in the demo video.
-4. **Identity verification on intake** (cut from time, design ready).
-5. **Real-network LLM latency benchmark** + a "show stale-cache score
-   instantly, refresh explanation in background" UX so the perceived
-   latency is bounded by §4's 20 ms even on a flaky network.
+1. **Sit down with real practitioners and watch them work.** 3–5
+   receptionists and aesthetic-clinic doctors, observed mid-intake in
+   their actual rooms with their actual patients. The pricing model,
+   the feature roadmap, and the question of whether the longitudinal
+   chart even ends up in the patient conversation are all things those
+   sessions answer better than any thought experiment I run alone.
+   This is the highest-leverage single thing I can do before writing
+   more code.
+2. **Collect real intake data and partner with a clinic to train a true
+   end-to-end model.** The current deterministic CV pipeline is a
+   defensible Phase-1 wedge precisely because it works without any
+   data. Phase 2 is using the longitudinal photos a deployment
+   generates — under proper consent — to train an actual end-to-end
+   skin-progression model. That only becomes possible once a clinic is
+   onboard and the consent pipeline is in place; the deterministic
+   layer in §1 is what lets us reach that point honestly, by being
+   useful from day one without needing the data we don't yet have.
+3. **Identity verification on intake** (cut from time, design ready).

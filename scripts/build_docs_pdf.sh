@@ -113,5 +113,6 @@ render() {
   echo "Wrote ${out_pdf}"
 }
 
-render "${DOCS_DIR}/PRD.md" "FaceTrack CRM — PRD" "${comfortable_css}" "${DOCS_DIR}/PRD.pdf"
-render "${DOCS_DIR}/TDD.md" "FaceTrack CRM — TDD" "${tight_css}"       "${DOCS_DIR}/TDD.pdf"
+render "${DOCS_DIR}/PRD.md"         "FaceTrack CRM — PRD"         "${comfortable_css}" "${DOCS_DIR}/PRD.pdf"
+render "${DOCS_DIR}/TDD.md"         "FaceTrack CRM — TDD"         "${tight_css}"       "${DOCS_DIR}/TDD.pdf"
+render "${DOCS_DIR}/BUILD_NOTES.md" "FaceTrack CRM — Build Notes" "${comfortable_css}" "${DOCS_DIR}/BUILD_NOTES.pdf"
