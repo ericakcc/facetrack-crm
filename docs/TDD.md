@@ -84,13 +84,13 @@ Failures yield actionable reasons (rendered to the receptionist in Traditional C
 
 | Stage | p50 | p95 |
 |---|---:|---:|
-| Alignment + ROI extraction (MediaPipe Tasks) | 7.0 ms | 7.5 ms |
-| Consistency Gate (4 checks + ArUco) | 8.1 ms | 8.5 ms |
-| Scoring (5 metrics × 4 ROIs) | 2.2 ms | 2.5 ms |
-| **End-to-end (excl. LLM)** | **17.2 ms** | **18.1 ms** |
+| Alignment + ROI extraction (MediaPipe Tasks) | 8.4 ms | 9.5 ms |
+| Consistency Gate (4 checks + ArUco) | 6.4 ms | 6.9 ms |
+| Scoring (5 metrics × 4 ROIs) | 4.4 ms | 4.6 ms |
+| **End-to-end (excl. LLM)** | **18.9 ms** | **20.0 ms** |
 | Explainer (Claude Sonnet 4.6, network) | ~1.5 s | ~2.5 s |
 
-Python 3.11 (mediapipe 0.10 has spotty 3.12 wheels on macOS arm64). uv-managed deps, ruff-formatted, pytest-tested (56 tests across 7 files). `anthropic` + `google-genai` SDKs are optional; absent both, the app runs against `MockExplainer` and the loop still works end-to-end. Per-visit LLM cost at Sonnet 4.6 pricing ≈ **\$0.0048 / visit** (~600 in + ~200 out tokens); 1 000 visits / month ≈ **\$5 / month** — a rounding error vs. the human time saved drafting the treatment note.
+Python 3.11 (mediapipe 0.10 has spotty 3.12 wheels on macOS arm64). uv-managed deps, ruff-formatted, pytest-tested (71 tests across 7 files). `anthropic` + `google-genai` SDKs are optional; absent both, the app runs against `MockExplainer` and the loop still works end-to-end. Per-visit LLM cost at Sonnet 4.6 pricing ≈ **\$0.0048 / visit** (~600 in + ~200 out tokens); 1 000 visits / month ≈ **\$5 / month** — a rounding error vs. the human time saved drafting the treatment note.
 
 ## 7. Limitations · full catalogue in [`docs/LIMITATIONS.md`](./LIMITATIONS.md)
 

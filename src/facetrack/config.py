@@ -45,7 +45,7 @@ SHARPNESS_MIN_LAPLACIAN_VAR: float = 30.0
 # 5° is intentionally tiny: the side photos exist to capture cheek skin
 # texture from a slightly different angle (not a dramatic profile), so the
 # threshold just needs to discriminate "user has nudged their head" from
-# "user is still perfectly square to the camera". Front tolerance is ±8°,
+# "user is still perfectly square to the camera". Front tolerance is ±15°,
 # so a 5° profile threshold still gives a clean discrimination band.
 PROFILE_YAW_MIN_DEG: float = 5.0
 PROFILE_PITCH_TOLERANCE_DEG: float = 15.0

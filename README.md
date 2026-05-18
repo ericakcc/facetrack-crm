@@ -4,6 +4,24 @@
 > **MVP 追蹤皮秒雷射淡斑療程**；同一套架構為擴展至其他醫美術後（肝斑、痘疤、紅血絲）而設計。
 > **AI Fund Engineer in Residence — Build Challenge submission.**
 
+## Panel reviewer — start here
+
+| Doc | What it covers |
+|---|---|
+| [`docs/PRD.pdf`](./docs/PRD.pdf) | Product narrative, user, wedge → platform |
+| [`docs/TDD.pdf`](./docs/TDD.pdf) | Imaging pipeline · reliability · workflow · consistency controls |
+| [`docs/BUILD_NOTES.pdf`](./docs/BUILD_NOTES.pdf) | Authorship, debug stories, latency + reproducibility tables |
+| [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) | 6 failure modes × Phase-2 mitigations |
+
+Reproduce the headline numbers from the BUILD_NOTES tables yourself:
+
+```bash
+uv run python scripts/benchmark.py                 # latency table (M4 Pro: 18.9 ms p50)
+uv run python scripts/reproducibility_evidence.py  # σ̄ comparison + figure
+```
+
+Live app: _TBD (Streamlit Cloud)_  ·  Demo video: _TBD (Loom)_
+
 ## What it does
 
 A standardized facial-photo intake flow that produces **quantified, reproducible**
@@ -60,7 +78,7 @@ The LLM never produces the numbers on the chart.
 Streamlit UI (繁體中文)
        │
        ▼
-FacePipeline ── ConsistencyGate ── ScoringEngine ── (Mock | Claude) Explainer
+FacePipeline ── ConsistencyGate ── ScoringEngine ── (Mock | Anthropic | Gemini) Explainer
 (MediaPipe)     (pose/exp/sharp/color)  (5 CV metrics)        │
        │                                                       ▼
        └──────────────── SQLite (SQLModel) ◀──── editable TreatmentNote
@@ -131,7 +149,7 @@ facetrack-crm/
 ├── data/
 │   ├── facetrack.db                # SQLite (gitignored)
 │   ├── photos/                     # Saved intake photos (gitignored)
-│   └── test_images/                # 3 CC0 AI-generated faces for smoke testing
+│   └── test_images/                # CC0 AI-generated faces (test_face_{1,2,3}.jpg used by smoke tests)
 ├── docs/
 │   ├── PRD.md                      # Product requirements (1-2 pages)
 │   ├── TDD.md                      # Technical design (1-2 pages)
@@ -139,8 +157,11 @@ facetrack-crm/
 │   ├── LIMITATIONS.md              # Honest failure-mode catalogue + Phase-2 plan
 │   └── figures/reproducibility.png # Determinism evidence (embedded in TDD §3)
 ├── scripts/
+│   ├── benchmark.py                # End-to-end latency (BUILD_NOTES §4 source)
+│   ├── reproducibility_evidence.py # σ̄ comparison chart (TDD §3, BUILD_NOTES §4 source)
+│   ├── build_docs_pdf.sh           # Render PRD / TDD / BUILD_NOTES PDFs
 │   └── generate_demo_photos.py     # Nano Banana Pro longitudinal photo gen
-├── tests/                          # pytest suite (mock explainer, app imports)
+├── tests/                          # 71 tests across 7 files — run with: uv run pytest -v
 ├── pyproject.toml                  # uv-managed deps + ruff/pytest config
 ├── requirements.txt                # Mirrors pyproject for Streamlit Cloud
 └── runtime.txt                     # python-3.11 for Streamlit Cloud
