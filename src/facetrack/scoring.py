@@ -4,7 +4,7 @@ The core IP. Five reproducible, deterministic CV metrics — never an LLM:
 
     pigmentation   black-hat morphology density (dark-spot pixel ratio)
     erythema       mean a* in CIE Lab (redness)
-    wrinkle        Sobel-magnitude edge density at face-line orientations
+    wrinkle        Sobel-gradient-magnitude edge density (isotropic)
     pore           Laplacian-of-Gaussian blob density at small scale
     uniformity     inverse-normalized L* standard deviation
 
