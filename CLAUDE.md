@@ -4,16 +4,18 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-05-18 (end of session 2 — live face-mesh capture)
+> **Last updated**: 2026-05-18 (end of session 3 — history ROI overlay, Gemini explainer, EricZou demo bypass)
 > **Deadline**: 2026-05-19 (default 48hr; brief allows extension with anticipated date)
 >
-> ## ⏭️ Resuming work? Jump to [§10 — Session 2 changes](#10-session-2--live-face-mesh-capture) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
+> ## ⏭️ Resuming work? Jump to [§11 — Session 3 changes](#11-session-3--history-roi-overlay-gemini-backend-demo-data) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
 >
-> **Session 2 replaced the blind `st.camera_input` flow with a live MediaPipe**
-> **Face Mesh widget (browser-side inference, neon mesh overlay, lock-then-3s**
-> **countdown, distance gating). Front photo is mandatory, left/right profiles**
-> **optional. ConsistencyGate now supports `pose_mode` (frontal / profile_left /**
-> **profile_right) and measures sharpness on the face crop. See §10.**
+> **Session 3 added an interactive ROI overlay inside the history view (heatmap**
+> **+ CLAHE thumbnails, both default-collapsed via checkbox toggles since**
+> **Streamlit forbids nested expanders), a second LLM backend (Gemini, with**
+> **auto-fallback from Anthropic), patient_service / score_display modules**
+> **factored out of app.py, and a DB-only "demo bypass" that flips EricZou's**
+> **three visits to quality_passed=True so the presenter's own face shows up**
+> **as a tracking baseline. See §11.**
 
 ---
 
@@ -261,3 +263,83 @@ opaque "模型錯誤" badge wasted ~30 min — never again.
   symlinked, but copy is platform-independent and only 3.6 MB.
 - No live heatmap overlay during capture — that's a post-capture feature
   and `compose_intake_view` already handles it on the still photo.
+
+---
+
+## 11. Session 3 — history ROI overlay, Gemini backend, demo data
+
+This session was about making the **history view** (`📋 就診歷史`) interactive
+enough to drive the doctor↔patient conversation, plus a second LLM backend so
+the demo isn't blocked on a single API key, plus seating Eric's own face in
+the DB as a presentable case for the Loom recording.
+
+### New files (committed in `f655d10`)
+
+| Path | Owns |
+|---|---|
+| `src/facetrack/patient_service.py` | CRUD for `Patient` extracted from `app.py`: `create_patient`, `get_patient`, `list_patients`, `update_patient`, `soft_delete_patient`, `restore_patient`. Soft-delete means a flag flip, not a row delete — history stays intact. |
+| `src/facetrack/score_display.py` | UI-side helpers: `to_health_score(metric, raw)` (inverts raw scores so "higher = better skin" across all 5 metrics, matching the radar/line-chart convention), `health_band(health)` → `(emoji, label_zh, color)`, plus the three colour constants used by the score cards. |
+| `tests/conftest.py` | Shared fixtures (currently: temp SQLite DB per test, used by the new patient_service / score_display tests). |
+| `tests/test_patient_service.py` | CRUD + soft-delete + restore + listing-excludes-soft-deleted contract. |
+| `tests/test_score_display.py` | Inversion direction per metric (pigmentation/erythema/wrinkle/pore inverted; uniformity passthrough), band thresholds, colour assignment. |
+| `.env.example` | Template for `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `LLM_MODEL`, `GEMINI_MODEL`, `LLM_BACKEND`. Real `.env` is gitignored. |
+| `data/test_images/test_{1,2,3}.png` | Three CC0 test faces referenced by the deploy smoke-test in §6. |
+
+### Modified files
+
+- **`app.py`** —
+  - **History view ROI overlay** (`page_history`): two checkbox toggles
+    (Streamlit forbids nested expanders, so this is the workaround):
+    - `🔬 顯示 ROI 訊號疊圖` — re-runs alignment on the stored front photo
+      and shows `compose_intake_view(...)` with a metric selector + ROI box
+      toggle. Heatmap defaults to pigmentation (the 皮秒雷射 primary metric).
+    - `🧪 顯示各 ROI 局部影像（CLAHE 平衡後）` — four side-by-side ROI
+      thumbnails for cross-visit comparison.
+  - Two new `@st.cache_data` helpers — `_history_overlay_rgb(path, mtime,
+    metric, show_roi)` and `_history_rois_rgb(path, mtime)` — so flipping
+    indicators doesn't re-trigger MediaPipe. `(path, mtime)` keys mean
+    overwriting a photo invalidates the cache automatically.
+  - Imports `Gender`, `patient_service` and `score_display` (relocated from
+    inline helpers).
+- **`src/facetrack/llm_explainer.py`** — full rewrite of the backend layer.
+  Now exposes a factory `get_explainer()` that picks Anthropic / Gemini /
+  Mock based on `LLM_BACKEND` env var (or auto: Anthropic if key present,
+  else Gemini, else Mock). Both real backends fall back to `MockExplainer`
+  on API error — the demo never hard-fails. The interface still takes
+  **scores only**, never pixels (non-negotiable, §7).
+- **`src/facetrack/config.py`** — `GEMINI_API_KEY`, `GEMINI_MODEL`,
+  `LLM_BACKEND` env wiring.
+- **`src/facetrack/db.py`** — patient soft-delete column + helper used by
+  `patient_service`.
+- **`pyproject.toml` / `uv.lock`** — added `google-genai` for the Gemini
+  backend.
+
+### DB-only "demo bypass" — EricZou
+
+There is **no code path** for per-patient bypass — quality gating is global
+and stays global. Instead, Eric's three visits in the local SQLite DB
+(`visits.id ∈ {10, 11, 12}`) were mutated directly: `quality_passed`
+flipped to `True`, and the embedded `quality_report_json` had its
+`pose.passed` / `exposure.passed` / `sharpness.passed` all set to `True`,
+`failure_reasons_zh` emptied, `summary_zh` rewritten to the pass message.
+
+This means:
+- The fix is **specific to the local DB**. A fresh `seed --force` rebuilds
+  the DB without these patches; for the Loom recording, do **not** re-seed
+  after capturing Eric's photos.
+- The Streamlit Cloud deploy gets a freshly-seeded DB, so EricZou won't
+  exist there at all. If you want Eric's demo case on the cloud build,
+  either re-do the capture against the deployed app **then** re-apply the
+  same JSON mutation against the cloud DB, or just rely on the seed
+  patients for that flow.
+
+### Things explicitly NOT done in session 3
+
+- The demo bypass is **not** generalised into a `DEMO_BYPASS_PATIENT_NAMES`
+  config or a per-patient bypass flag. The user explicitly preferred a
+  DB-level edit over an app.py whitelist, so the gate code stays clean.
+- History view does **not** re-run the LLM explainer — it shows the
+  stored `TreatmentNote` from intake time. Re-explaining a past visit
+  would need a "regenerate" button; out of scope for the build challenge.
+- No new tests for the history overlay block — it's pure UI glue around
+  already-tested `compose_intake_view` / pipeline / scoring functions.
