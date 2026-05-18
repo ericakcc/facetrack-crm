@@ -4,7 +4,7 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-05-18 (end of session 3 — history ROI overlay, Gemini explainer, EricZou demo bypass)
+> **Last updated**: 2026-05-19 (BUILD_NOTES rewrite for panel review + cross-repo drift sweep)
 > **Deadline**: 2026-05-19 (default 48hr; brief allows extension with anticipated date)
 >
 > ## ⏭️ Resuming work? Jump to [§11 — Session 3 changes](#11-session-3--history-roi-overlay-gemini-backend-demo-data) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
@@ -59,7 +59,7 @@ FacePipeline ──▶ ConsistencyGate ──▶ ScoringEngine ──▶ SQLite
  alignment        sharpness/ArUco)     CV metrics, 0–10)   region_score·
  + 4 ROIs)              │                      │           treatment_note)
                         ▼                      ▼
-                Explainer (Mock | Anthropic Claude — sees SCORES only, never pixels)
+                Explainer (Mock | Anthropic | Gemini — sees SCORES only, never pixels)
 ```
 
 **Invariant**: LLM never touches images. Scoring path is bit-identical reproducible.
@@ -86,8 +86,10 @@ Append, do not delete — the history is itself useful context for future agents
 | 2026-05-18 | `POSE_TOLERANCE_DEG = 8.0` was unreachable for live webcam users — natural head tilt put roll consistently at ~-8° to -10°. | Relaxed to `15.0` for webcam-realistic tolerance; blurry-image regression test still trips at `30.0` Laplacian threshold. |
 | 2026-05-18 | `SHARPNESS_MIN_LAPLACIAN_VAR = 80.0` was DSLR-calibrated; Mac webcam JPEGs landed in 15–20 range. | Two-pronged fix: (a) threshold → `30.0`, (b) `_check_sharpness` now measures on face bbox crop when landmarks present (full frame fallback for the offline blur test). JPEG capture quality also bumped 0.92 → 0.95 in the JS component. |
 | 2026-05-18 | Profile pose threshold `PROFILE_YAW_MIN_DEG` started at 55°, then 25°. Both unreachable: most users can't turn past 30° before MediaPipe loses one eye and stops returning a transform. | Final value `5.0`. Use case is **skin-texture sampling at a slightly different angle**, not a dramatic profile — 5° is enough to expose more cheek without losing landmarks. Front frontal tolerance stays at ±15° so the discrimination band [-15, -5] and [+5, +15] is unambiguous. |
+| 2026-05-19 | `consistency_gate.py:9` module docstring still read "default ±8°" after the threshold was relaxed to 15.0; `scoring.py:7` described wrinkle as "edge density at face-line orientations" when the code is isotropic Sobel-magnitude with no orientation filtering. | Docstrings rewritten: `consistency_gate.py:9` → "default ±15° frontal; profile mode requires \|yaw\| ≥ 5°"; `scoring.py:7` → "Sobel-gradient-magnitude edge density (isotropic)". |
+| 2026-05-19 | Subagent drift sweep after the BUILD_NOTES rewrite: README + CLAUDE.md §4 arch diagrams listed `(Mock \| Claude)`, missing Gemini; `config.py:49` comment still claimed "Front tolerance is ±8°" two lines below `POSE_TOLERANCE_DEG = 15.0`; CLAUDE.md §6 seed-patient list named 王思婷 (actual `seed.py:45` is 張立宇); CLAUDE.md / memory test-count said "19" (actual 71); TDD §6 latency table cited an older run vs BUILD_NOTES §4's fresh numbers; memory `project_aifund_facetrack.md` still had ±8°, 19 tests, σ̄(ours)=0.19. | All fixed in commit b835176 follow-up. Explainer factory now shown as (Mock \| Anthropic \| Gemini). Seed name corrected. config.py comment synced to ±15°. TDD §6 regenerated from BUILD_NOTES §4 (alignment 8.4 / gate 6.4 / scoring 4.4 / total 18.9 ms p50). Test count synced to 71. Memory σ̄ + latency updated to the 2026-05-19 reproducibility / benchmark run (σ̄ 0.074 vs 0.538, 18.9 ms p50). |
 
-Currently open: **none** (as of 2026-05-18). If you find new drift, add a row.
+Currently open: **none** (as of 2026-05-19). If you find new drift, add a row.
 
 ## 6. Pickup checklist for the next session
 
@@ -102,10 +104,9 @@ Status at session-1 end (2026-05-17):
 | TDD 1–2 pages | ✅ `docs/TDD.md` (incl. reproducibility figure §3, latency table §6, LIMITATIONS link §7) |
 | Build / authorship note | ✅ `docs/BUILD_NOTES.md` |
 | Bonus: failure-mode catalogue | ✅ `docs/LIMITATIONS.md` (6 cases × Phase-2 fixes) |
-| Bonus: demo storyboard | ✅ `docs/DEMO_STORYBOARD.md` |
-| Bonus: submission email draft | ✅ `docs/SUBMISSION_EMAIL.md` (fill the 2 URLs) |
+| Bonus: panel PDFs | ✅ `docs/PRD.pdf` · `docs/TDD.pdf` · `docs/BUILD_NOTES.pdf` (rebuild via `scripts/build_docs_pdf.sh`) |
 
-**Test coverage**: 19 tests pass; fresh-clone-from-GitHub smoke-tested.
+**Test coverage**: 71 tests pass across 7 files; fresh-clone-from-GitHub smoke-tested.
 
 ### Remaining work (all manual — agent cannot do these)
 
@@ -125,7 +126,7 @@ Status at session-1 end (2026-05-17):
 ```
 
 **Smoke test on the deployed URL** (incognito tab):
-- Sidebar lists 3 seed patients (林雅婷 / 陳怡君 / 王思婷)
+- Sidebar lists 3 seed patients (林雅婷 / 陳怡君 / 張立宇)
 - 📈 縱向追蹤 renders radar + line chart
 - 📸 新增就診 shows two tabs: 📷 即時拍照 / 📁 上傳照片
 - Upload `data/test_images/test_face_1.jpg` → gate rejects (underexposed)
@@ -141,7 +142,7 @@ Status at session-1 end (2026-05-17):
        - a selfie with a mask, OR
        - a heavily makeup photo, OR
        - a photo with sunglasses
-4. Follow docs/DEMO_STORYBOARD.md scene-by-scene (7 scenes, target 3-4 min)
+4. Follow the smoke-test sequence in README "Smoke test for reviewers" (5 steps, target 3-4 min)
 5. Tool: Loom browser recorder (includes webcam bubble) OR OBS for local file
 6. Voiceover in 繁體中文
 ```
@@ -157,9 +158,9 @@ rejecting bad photos, which is the brief's "depth area visible in product eviden
 
 #### 4. Send submission email (~5 min)
 
-- Open `docs/SUBMISSION_EMAIL.md`
-- Replace `[STREAMLIT_CLOUD_URL]` and `[LOOM_URL]`
-- Send to `mike@aifund.ai`, subject `FaceTrack CRM — Build Challenge submission`
+- To: `mike@aifund.ai`
+- Subject: `FaceTrack CRM — Build Challenge submission`
+- Body: GitHub URL, Streamlit Cloud URL, Loom URL, and a one-paragraph pointer to `docs/PRD.pdf` / `docs/TDD.pdf` / `docs/BUILD_NOTES.pdf` (attach or link).
 
 ### Decision flags for the next session
 

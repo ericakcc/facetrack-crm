@@ -53,7 +53,7 @@ see `scripts/benchmark.py` and `scripts/reproducibility_evidence.py`.
   structurally prevented from making up numbers because it never sees the
   source pixels. This is enforced by the type signature, not by discipline.
 
-* **Streamlit 5-page UX in 繁體中文**, the SQLModel schema (Patient → Visit →
+* **Streamlit 6-page UX in 繁體中文** (`patients` / `intake` / `history` / `treatment` / `overview` / `settings`), the SQLModel schema (Patient → Visit →
   RegionScore → TreatmentNote), and the seed-trajectory generator used for
   deterministic test fixtures.
 
