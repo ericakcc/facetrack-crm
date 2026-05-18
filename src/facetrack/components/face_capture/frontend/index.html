@@ -319,17 +319,11 @@
 </head>
 <body>
   <div class="root">
-    <div style="background: #fde047; color: #1f1700; padding: 8px 14px; border-radius: 8px;
-                margin-bottom: 10px; font-weight: 700; font-size: 13px; text-align: center;
-                box-shadow: 0 0 24px rgba(253, 224, 71, 0.4);">
-      ⚡ NEW BUILD v13 · 2026-05-18 21:55 · sharpness 改算 face crop + JPEG quality 0.95
-    </div>
-
     <div id="errorBanner" class="error-banner"></div>
-    <div class="debug-log-header">⬇ DEBUG LOG（截圖或選取下方文字貼給 Claude） ⬇</div>
-    <div id="debugLog" class="debug-log">[boot] component loaded</div>
+    <div class="debug-log-header" style="display: none;">⬇ DEBUG LOG（截圖或選取下方文字貼給 Claude） ⬇</div>
+    <div id="debugLog" class="debug-log" style="display: none;">[boot] component loaded</div>
     <div class="actions" style="margin-top: 8px; margin-bottom: 12px;">
-      <button id="copyLogBtn">📋 複製 debug log</button>
+      <button id="copyLogBtn" style="display: none;">📋 複製 debug log</button>
       <button id="retryBtn" class="primary">🔄 重新初始化</button>
     </div>
 
