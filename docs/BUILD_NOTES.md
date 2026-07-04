@@ -164,10 +164,10 @@ qualitative gap is what matters, not the exact baseline number:
 |---|---:|---:|
 | pigmentation | 0.286 | 0.988 |
 | erythema | 0.139 | 0.565 |
-| wrinkle | 0.209 | 0.794 |
+| wrinkle | 0.091 | 0.488 |
 | pore | 0.232 | 0.595 |
 | uniformity | 0.119 | 0.792 |
-| **mean σ̄** | **0.197** | **0.747** |
+| **mean σ̄** | **0.173** | **0.686** |
 
 ~4× tighter than a representative stochastic grader. This is what
 "tracks consistently across visits" means in numbers.
@@ -181,6 +181,16 @@ mid-band where perturbation sensitivity is real and visible. The number
 that actually matters for longitudinal tracking moved the right way:
 **cross-resolution drift on the same face fell from up to 5.5 points
 (v1) to ≤ 1.05 points (v2)** — see Session 4 below for the mechanism.
+
+The v2-retuned wrinkle row deserves the same scrutiny in the other
+direction: this reference face sits in the top tail of the FFHQ
+population (raw wrinkle at/above the p95-calibrated 0.62 ceiling in
+57 of 80 per-ROI measurements across the 20 runs), so part of its
+post-retune σ (0.091) is ceiling-clamp, not pure robustness. That is
+the accepted cost of calibrating the range to the population p5–p95
+instead of to our 5 reference faces — ~5% of real faces will clamp at
+10 by construction. A mid-band reference face would make the wrinkle
+row comparable again; noted as a follow-up.
 
 ## 5. Trade-offs I made deliberately
 
@@ -365,6 +375,14 @@ the reference set (from up to 5.5 pre-v2).
   evenly-lit reference faces (`WRINKLE 0.10–0.50 → 0.25–0.75`,
   `PORE 0.01–0.15 → 0.03–0.22`); pigmentation / erythema / uniformity
   distributions were unchanged and keep their v1 ranges.
+* **Wrinkle range re-fitted a second time, now against ground truth**
+  (Session 6): FFHQ-Wrinkle (n=1000 hand-annotated faces, ROI-restricted,
+  CLAHE-matched to production) measures real-face `wrinkle_raw` p5–p95 =
+  [0.197, 0.619] — the reference-face ceiling of 0.75 was never reached,
+  so the top quarter of the 0–10 wrinkle scale was dead range.
+  `WRINKLE_RAW_RANGE` is now (0.20, 0.62), pinned to the measured
+  distribution by `tests/test_validation_benchmarks.py`
+  (`uv run pytest -m validation`).
 
 ## 7. What I cut for time
 
