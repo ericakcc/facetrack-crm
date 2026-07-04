@@ -4,18 +4,18 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-05-19 (BUILD_NOTES rewrite for panel review + cross-repo drift sweep)
-> **Deadline**: 2026-05-19 (default 48hr; brief allows extension with anticipated date)
+> **Last updated**: 2026-07-04 (Session 4 — Gate v2 + Scoring v2 hardening pass)
+> **Deadline**: submission sent 2026-05-19; current work targets the follow-up
+> panel calls (product-lead PRD call + CTO technical call)
 >
-> ## ⏭️ Resuming work? Jump to [§11 — Session 3 changes](#11-session-3--history-roi-overlay-gemini-backend-demo-data) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
+> ## ⏭️ Resuming work? Jump to [§12 — Session 4 changes](#12-session-4--gate-v2--scoring-v2) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
 >
-> **Session 3 added an interactive ROI overlay inside the history view (heatmap**
-> **+ CLAHE thumbnails, both default-collapsed via checkbox toggles since**
-> **Streamlit forbids nested expanders), a second LLM backend (Gemini, with**
-> **auto-fallback from Anthropic), patient_service / score_display modules**
-> **factored out of app.py, and a DB-only "demo bypass" that flips EricZou's**
-> **three visits to quality_passed=True so the presenter's own face shows up**
-> **as a tracking baseline. See §11.**
+> **Session 4 hardened both core features: the gate went 4 → 6 checks**
+> **(face-crop exposure, resolution-normalized sharpness + native-width floor,**
+> **lighting-uniformity, skin-visibility/occlusion, WB gain clamp) and scoring**
+> **gained 512px scale normalization, specular/shadow effective masks, a**
+> **denoised pigmentation metric, recalibrated wrinkle/pore ranges, and a**
+> **persisted SCORING_VERSION column. 71 → 92 tests. See §12.**
 
 ---
 
@@ -55,9 +55,10 @@ It is the **AI Fund Engineer in Residence Build Challenge** submission.
 
 ```
 FacePipeline ──▶ ConsistencyGate ──▶ ScoringEngine ──▶ SQLite
-(MediaPipe       (pose/exposure/      (5 deterministic    (patient·visit·
- alignment        sharpness/ArUco)     CV metrics, 0–10)   region_score·
- + 4 ROIs)              │                      │           treatment_note)
+(MediaPipe       (pose/exposure/      (5 deterministic    (patient·visit
+ alignment        sharpness/lighting/  CV metrics, 0–10,    incl. scoring_version·
+ + 512px scale-   skin/ArUco color)    glare/shadow-        region_score·
+ norm + 4 ROIs)         │              masked)              treatment_note)
                         ▼                      ▼
                 Explainer (Mock | Anthropic | Gemini — sees SCORES only, never pixels)
 ```
@@ -89,7 +90,12 @@ Append, do not delete — the history is itself useful context for future agents
 | 2026-05-19 | `consistency_gate.py:9` module docstring still read "default ±8°" after the threshold was relaxed to 15.0; `scoring.py:7` described wrinkle as "edge density at face-line orientations" when the code is isotropic Sobel-magnitude with no orientation filtering. | Docstrings rewritten: `consistency_gate.py:9` → "default ±15° frontal; profile mode requires \|yaw\| ≥ 5°"; `scoring.py:7` → "Sobel-gradient-magnitude edge density (isotropic)". |
 | 2026-05-19 | Subagent drift sweep after the BUILD_NOTES rewrite: README + CLAUDE.md §4 arch diagrams listed `(Mock \| Claude)`, missing Gemini; `config.py:49` comment still claimed "Front tolerance is ±8°" two lines below `POSE_TOLERANCE_DEG = 15.0`; CLAUDE.md §6 seed-patient list named 王思婷 (actual `seed.py:45` is 張立宇); CLAUDE.md / memory test-count said "19" (actual 71); TDD §6 latency table cited an older run vs BUILD_NOTES §4's fresh numbers; memory `project_aifund_facetrack.md` still had ±8°, 19 tests, σ̄(ours)=0.19. | All fixed in commit b835176 follow-up. Explainer factory now shown as (Mock \| Anthropic \| Gemini). Seed name corrected. config.py comment synced to ±15°. TDD §6 regenerated from BUILD_NOTES §4 (alignment 8.4 / gate 6.4 / scoring 4.4 / total 18.9 ms p50). Test count synced to 71. Memory σ̄ + latency updated to the 2026-05-19 reproducibility / benchmark run (σ̄ 0.074 vs 0.538, 18.9 ms p50). |
 
-Currently open: **none** (as of 2026-05-19). If you find new drift, add a row.
+| 2026-07-04 | TDD §3 claimed erythema a* is "luminance-independent after the gate calibrates colour", but `app.py` scored the **uncalibrated** pipeline ROIs and only *persisted* the calibrated image — stored photo and stored score disagreed. | app.py now re-runs the pipeline on the calibrated image before scoring when the gray-card check passes. TDD §2 documents the re-run. |
+| 2026-07-04 | Latent coordinate-frame bug: `_check_sharpness` cropped the **original** frame using **aligned-image** landmark coords. Harmless while alignment was rotation-only (same canvas), guaranteed wrong once scale normalization landed. | All gate face-crop checks (exposure/sharpness/lighting) now read from `pipeline_result.aligned_image` via the shared `_face_crop` helper. |
+| 2026-07-04 | BUILD_NOTES/TDD reproducibility table showed σ = 0.000 for wrinkle+pore, presented as robustness; actually the scores were clamp-saturated at 10.0 on the reference face (v1 ranges too narrow at the real capture scale). | Ranges re-fitted at the 512px scale; new table (σ̄ 0.197 vs 0.747) published with an explicit honesty note in BUILD_NOTES §4 / TDD §3. |
+| 2026-07-04 | README smoke test said `test_face_1.jpg` is rejected as "underexposed"; with face-crop exposure it is actually rejected for 曝光過度 (blown-out left side, 18.8% clipped) + 光照不均 (asym 0.52). | README wording updated; the deploy smoke-test expectation in §6 below updated to match. |
+
+Currently open: **none** (as of 2026-07-04). If you find new drift, add a row.
 
 ## 6. Pickup checklist for the next session
 
@@ -106,7 +112,7 @@ Status at session-1 end (2026-05-17):
 | Bonus: failure-mode catalogue | ✅ `docs/LIMITATIONS.md` (6 cases × Phase-2 fixes) |
 | Bonus: panel PDFs | ✅ `docs/PRD.pdf` · `docs/TDD.pdf` · `docs/BUILD_NOTES.pdf` (rebuild via `scripts/build_docs_pdf.sh`) |
 
-**Test coverage**: 71 tests pass across 7 files; fresh-clone-from-GitHub smoke-tested.
+**Test coverage**: 92 tests pass across 9 files; fresh-clone-from-GitHub smoke-tested (pre-Session-4).
 
 ### Remaining work (all manual — agent cannot do these)
 
@@ -129,7 +135,7 @@ Status at session-1 end (2026-05-17):
 - Sidebar lists 3 seed patients (林雅婷 / 陳怡君 / 張立宇)
 - 📈 縱向追蹤 renders radar + line chart
 - 📸 新增就診 shows two tabs: 📷 即時拍照 / 📁 上傳照片
-- Upload `data/test_images/test_face_1.jpg` → gate rejects (underexposed)
+- Upload `data/test_images/test_face_1.jpg` → gate rejects (臉部曝光過度 + 光照不均)
 
 **If deploy fails**: most likely cause is the 3.6 MB `face_landmarker.task` not making it into the deploy. It IS committed (verify with `git ls-files src/facetrack/models/`). If still failing, check Streamlit Cloud logs for `FileNotFoundError`.
 
@@ -343,3 +349,81 @@ This means:
   would need a "regenerate" button; out of scope for the build challenge.
 - No new tests for the history overlay block — it's pure UI glue around
   already-tested `compose_intake_view` / pipeline / scoring functions.
+
+---
+
+## 12. Session 4 — Gate v2 + Scoring v2
+
+Hardening pass over the two core features (拍照品質辨識 + 膚質偵測),
+threshold-calibrated against `data/test_images` before any code was
+written. Full rationale with before/after numbers: BUILD_NOTES §6
+"Session 4". 71 → 92 tests, all green; `ruff check src/ tests/ app.py`
+clean; reproducibility figure + benchmark regenerated.
+
+### The core defect this session fixed
+
+Scores depended on camera distance / resolution: all five metrics use
+fixed pixel-size kernels but nothing fixed the face's pixel size.
+Measured: same photo at 0.5× moved pore 4.94→10.00, wrinkle 2.22→5.69.
+Fix = scale normalization (aligned face rescaled to
+`NORMALIZED_FACE_WIDTH_PX = 512` in the same affine warp) + gate floor
+(`MIN_NATIVE_FACE_WIDTH_PX = 400`, reject "臉部影像過小") + pigmentation
+denoise (3×3 Gaussian pre-black-hat — its cutoff was counting
+resolution-dependent noise). Residual cross-resolution drift ≤ 1.05
+points (was ≤ 5.5).
+
+### Modified files
+
+- **`config.py`** — new constants, each with a calibration comment:
+  `EXPOSURE_{LOW,HIGH}_PCT_FACE`, `SHARPNESS_NORM_FACE_WIDTH_PX` (256),
+  `SHARPNESS_MIN_LAPLACIAN_VAR` 30→40 (normalized measure),
+  `LIGHTING_ASYMMETRY_MAX` (0.25), `SKIN_RATIO_MIN` (0.35) +
+  `SKIN_{CR,CB}_RANGE`, `WB_GAIN_{MIN,MAX}` (0.6/1.8),
+  `NORMALIZED_FACE_WIDTH_PX` (512), `MIN_NATIVE_FACE_WIDTH_PX` (400),
+  `SCALE_FACTOR_{MIN,MAX}`, `MAX_ALIGNED_PIXELS`, `SCORING_VERSION` (2 —
+  lives here, not scoring.py, to avoid a db↔scoring circular import;
+  scoring.py re-exports it).
+- **`cv_pipeline.py`** — `_align_face` rotates AND rescales in one warp
+  (canvas re-centered, landmarks transformed by the same matrix);
+  `CVPipelineResult` gains `scale_factor` + `native_face_width_px`.
+- **`consistency_gate.py`** — QualityReport gains `lighting` + `skin`
+  CheckResults (JSON-additive; old stored reports render fine via
+  st.json). Shared `_face_crop` reads from **aligned_image** (landmark
+  coords live there — cropping the original frame with aligned coords
+  was a latent bug that scale-norm would have detonated). Exposure /
+  sharpness / lighting measure the face crop; skin check runs YCrCb
+  ratio per ROI mask; WB gains clamped.
+- **`scoring.py`** — `_effective_mask()` (L* band [20, 235], 1px erode,
+  30% keep-ratio fallback) applied inside every raw metric; pigmentation
+  gets the Gaussian denoise; `WRINKLE_RAW_RANGE` (0.25, 0.75) and
+  `PORE_RAW_RANGE` (0.03, 0.22) re-fitted at 512px scale.
+- **`db.py`** — `REGION_LABELS_ZH` moved here (single source; gate +
+  app.py both consume); `Visit.scoring_version` column +
+  `_migrate_add_visit_scoring_version_column()` (legacy rows → 1).
+- **`app.py`** — 6-check report renders 2×3; save path stamps
+  `scoring_version=SCORING_VERSION`; **when the gray-card fires, the
+  pipeline re-runs on the calibrated image before scoring** (stored
+  photo and stored score now agree — see §5 log).
+
+### New test files
+
+- `tests/test_pipeline_scale.py` — face width normalized to 512±2%,
+  scale_factor reported, undersampled face rejected by gate,
+  cross-resolution score drift < 1.5.
+- `tests/test_scoring_robustness.py` — glare/shadow exclusion, exclusion
+  determinism, fully-specular fallback, SCORING_VERSION persistence +
+  legacy migration.
+- `tests/test_consistency_gate.py` — +10 Gate-v2 tests (face-crop
+  exposure both directions, lighting asymmetry ±, skip-without-face,
+  sharpness resolution-invariance, skin visibility ±, WB gain clamp).
+
+### Known follow-ups (not regressions)
+
+- The live-capture JS HUD does not yet mirror the lighting/skin checks —
+  a side-lit user only learns at server-side gate time. Port the two
+  checks to `index.html` for real-time guidance.
+- `data/facetrack.db` on disk still has v1-scored visits (tagged
+  scoring_version=1 by migration). Longitudinal charts do not yet draw a
+  version-boundary annotation — worth adding before the CTO call.
+- PDFs (`docs/*.pdf`) must be regenerated via
+  `scripts/build_docs_pdf.sh` after this session's doc edits.

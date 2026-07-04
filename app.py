@@ -29,6 +29,7 @@ from facetrack.config import (
 from facetrack.consistency_gate import QualityReport, get_gate
 from facetrack.cv_pipeline import get_pipeline
 from facetrack.db import (
+    REGION_LABELS_ZH,
     Gender,
     Patient,
     Region,
@@ -54,7 +55,7 @@ from facetrack.score_display import (
     health_band,
     to_health_score,
 )
-from facetrack.scoring import aggregate_face_scores, score_visit
+from facetrack.scoring import SCORING_VERSION, aggregate_face_scores, score_visit
 from facetrack.seed import seed_database
 from facetrack.visualization import compose_intake_view
 
@@ -228,9 +229,7 @@ def line_chart(visits: list[Visit], scores_by_visit: dict[int, dict[str, float]]
     fig = go.Figure()
     dates = [v.visit_date for v in visits]
     for m in METRICS:
-        ys = [
-            to_health_score(m, scores_by_visit.get(v.id, {}).get(m, 0.0)) for v in visits
-        ]
+        ys = [to_health_score(m, scores_by_visit.get(v.id, {}).get(m, 0.0)) for v in visits]
         fig.add_trace(
             go.Scatter(
                 x=dates,
@@ -624,18 +623,21 @@ def _render_health_card(
 
 
 def _render_quality_report(report: QualityReport) -> None:
-    """Side-by-side visualization of the four quality checks."""
-    cols = st.columns(4)
+    """Side-by-side visualization of the six quality checks (two rows of 3)."""
     checks = [
         ("姿勢", report.pose, "yaw_deg"),
-        ("曝光", report.exposure, "mean_brightness"),
+        ("曝光（臉部）", report.exposure, "mean_brightness"),
         ("清晰度", report.sharpness, "laplacian_variance"),
+        ("光照均勻", report.lighting, "asymmetry_ratio"),
+        ("皮膚可見度", report.skin, "min_skin_ratio"),
         ("色彩校正", report.color, "marker_detected"),
     ]
-    for col, (name, check, key) in zip(cols, checks, strict=False):
-        with col:
-            icon = "✅" if check.passed else "❌"
-            st.metric(label=f"{icon} {name}", value=str(check.measurement.get(key, "—")))
+    for row_start in (0, 3):
+        cols = st.columns(3)
+        for col, (name, check, key) in zip(cols, checks[row_start : row_start + 3], strict=False):
+            with col:
+                icon = "✅" if check.passed else "❌"
+                st.metric(label=f"{icon} {name}", value=str(check.measurement.get(key, "—")))
     if report.failure_reasons_zh:
         st.error("**未通過原因**：\n\n" + "\n\n".join(f"- {r}" for r in report.failure_reasons_zh))
     else:
@@ -758,6 +760,16 @@ def page_intake(patient: Patient) -> None:
     pipeline_result = pipeline.process(front_image_bgr)
     gate = _gate()
     report, calibrated = gate.evaluate(front_image_bgr, pipeline_result, pose_mode="frontal")
+
+    if report.color.passed:
+        # The gray-card white balance was applied. Re-run the pipeline on the
+        # calibrated pixels so the ROIs we score are the SAME pixels as the
+        # photo we persist — otherwise the stored photo re-scores differently
+        # from the stored score, and the erythema (a*) metric never actually
+        # benefits from the calibration the TDD promises.
+        recalibrated_result = pipeline.process(calibrated)
+        if recalibrated_result.face_detected:
+            pipeline_result = recalibrated_result
 
     st.subheader("① 影像一致性檢查（正臉）")
     _render_quality_report(report)
@@ -921,6 +933,7 @@ def page_intake(patient: Patient) -> None:
                 photo_right_path=side_paths["profile_right"],
                 quality_passed=report.overall_passed,
                 quality_report_json=json.dumps(report.to_dict(), ensure_ascii=False, default=str),
+                scoring_version=SCORING_VERSION,
             )
             session.add(visit)
             session.commit()
@@ -956,13 +969,7 @@ def page_intake(patient: Patient) -> None:
 
 
 def region_label_zh(region: Region) -> str:
-    mapping = {
-        Region.LEFT_CHEEK: "左頰",
-        Region.RIGHT_CHEEK: "右頰",
-        Region.FOREHEAD: "額頭",
-        Region.CHIN: "下巴",
-    }
-    return mapping.get(region, region.value)
+    return REGION_LABELS_ZH.get(region, region.value)
 
 
 def page_history(patient: Patient) -> None:
@@ -1014,9 +1021,9 @@ def page_history(patient: Patient) -> None:
                                 "熱力圖指標",
                                 options=["none", *METRICS],
                                 index=1,  # default = pigmentation（皮秒雷射主指標）
-                                format_func=lambda k: "（無）"
-                                if k == "none"
-                                else METRIC_LABELS_ZH[k],
+                                format_func=lambda k: (
+                                    "（無）" if k == "none" else METRIC_LABELS_ZH[k]
+                                ),
                                 key=f"hist_metric_{v.id}",
                             )
                             show_roi_box = st.checkbox(

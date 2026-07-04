@@ -22,9 +22,9 @@ In Taiwan, the receptionist is overwhelmingly female, twenties, fluent in messag
 
 1. **Check-in** — receptionist picks the patient in the sidebar.
 2. **Intake photo** — on the "New visit" page: live face-mesh capture (auto-fires when pose / face-fill / stability all pass) **or** an upload fallback.
-3. **Photo-Consistency Gate** runs *before* anything else. Failing photos are rejected with a concrete reason ("head turned 18° right; please face the camera") and the receptionist re-shoots. **This is the product's most important property** — without it, the longitudinal scores are garbage.
-4. **CV pipeline** aligns the face, extracts four ROIs (left/right cheek, forehead, chin) as polygon masks, applies per-photo CLAHE.
-5. **Scoring engine** computes five deterministic skin metrics per ROI; identical photo → identical score.
+3. **Photo-Consistency Gate** runs *before* anything else. Six checks — pose, face exposure, sharpness (with a minimum-resolution floor), lighting uniformity, skin visibility, and gray-card color — reject failing photos with a concrete reason: "head turned 18° right", "light is uneven — left side of the face is brighter", "the chin area is occluded (mask?)". The receptionist re-shoots. **This is the product's most important property** — without it, the longitudinal scores are garbage.
+4. **CV pipeline** aligns the face, rescales it to a fixed anatomical size (so the same skin photographed closer or on a newer phone scores the same), extracts four ROIs (left/right cheek, forehead, chin) as polygon masks, applies per-photo CLAHE.
+5. **Scoring engine** computes five deterministic skin metrics per ROI, ignoring glare and deep-shadow pixels; identical photo → identical score. Every saved visit records the scoring-formula version, so a future formula change can never silently mix incomparable numbers in one patient's chart.
 6. **LLM explainer** drafts an explanation + treatment suggestion in Traditional Chinese. **The physician edits everything before saving** — every AI output is a draft, never a verdict.
 7. **Longitudinal view** updates the radar + line chart automatically.
 
@@ -32,7 +32,7 @@ In Taiwan, the receptionist is overwhelmingly female, twenties, fluent in messag
 
 Three non-obvious decisions:
 
-1. **Reject bad photos at intake, not later.** Most "AI for medical imaging" silently accepts garbage and emits confident-looking output. In a clinic that erodes trust the first time a clinician notices the score moved while the patient wasn't treated. We make the gate visible and audible *at the moment of capture*.
+1. **Reject bad photos at intake, not later.** Most "AI for medical imaging" silently accepts garbage and emits confident-looking output. In a clinic that erodes trust the first time a clinician notices the score moved while the patient wasn't treated. We make the gate visible and audible *at the moment of capture* — including the two failure modes clinics actually hit daily: window side-light (corrupts the left-vs-right cheek comparison) and occlusion (a masked chin would otherwise be scored as if fabric were skin).
 2. **CV scores are deterministic; the LLM is decorative.** The number on the chart comes from a fixed formula (black-hat morphology pixel ratio → pigmentation). Re-run on the same photo → same number, to the last decimal. The LLM only translates numbers into prose + a draft plan. The system is defensible when a patient or a regulator asks "how did you get this number?"
 3. **Editable AI output, always.** The physician's edits are stored alongside the AI draft. Clinics will not buy a system that overwrites their judgement.
 

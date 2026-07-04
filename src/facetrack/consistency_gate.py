@@ -2,14 +2,22 @@
 
 Before any quantitative score is computed, every intake photo passes through
 this gate. The gate enforces that the photo is comparable to prior visits along
-four dimensions, so that longitudinal scores reflect actual skin change rather
+six dimensions, so that longitudinal scores reflect actual skin change rather
 than camera/setup noise:
 
     1. POSE       — yaw / pitch / roll within tolerance (default ±15° frontal;
                     profile mode requires |yaw| ≥ 5°, see config.py)
-    2. EXPOSURE   — histogram-based over/under-exposure pixel ratio
-    3. SHARPNESS  — Laplacian-variance focus check
-    4. COLOR      — optional white-balance via ArUco gray-reference marker
+    2. EXPOSURE   — over/under-exposure pixel ratio, measured on the FACE
+                    crop when landmarks are available (a dark clinic wall must
+                    not fail a well-lit face)
+    3. SHARPNESS  — Laplacian-variance focus check on the face crop resized
+                    to a fixed width (resolution-invariant threshold)
+    4. LIGHTING   — left/right face-brightness asymmetry; side-lit faces
+                    corrupt the left-cheek vs right-cheek comparison
+    5. SKIN       — per-ROI skin-pixel ratio (YCrCb); catches masks,
+                    sunglasses, hair occlusion before fabric gets scored
+    6. COLOR      — optional white-balance via ArUco gray-reference marker
+                    (soft warning; per-channel gains are clamped)
 
 A photo that fails any check is rejected with a specific, actionable reason
 ("頭部右偏 12°, 請正對鏡頭"). This is the "show, don't tell" moment in the
@@ -17,7 +25,8 @@ demo video: two bad photos rejected, one good photo accepted.
 
 The gate consumes the FacePipeline's output (it needs the alignment landmarks
 and transformation matrix), so call `FacePipeline.process()` first, then
-`ConsistencyGate.evaluate()`.
+`ConsistencyGate.evaluate()`. Face-crop checks run on the pipeline's
+scale-normalized `aligned_image` — the same pixels the scorer will see.
 """
 
 from __future__ import annotations
@@ -31,13 +40,24 @@ import numpy as np
 
 from facetrack.config import (
     EXPOSURE_HIGH_PCT,
+    EXPOSURE_HIGH_PCT_FACE,
     EXPOSURE_LOW_PCT,
+    EXPOSURE_LOW_PCT_FACE,
+    LIGHTING_ASYMMETRY_MAX,
+    MIN_NATIVE_FACE_WIDTH_PX,
     POSE_TOLERANCE_DEG,
     PROFILE_PITCH_TOLERANCE_DEG,
     PROFILE_YAW_MIN_DEG,
     SHARPNESS_MIN_LAPLACIAN_VAR,
+    SHARPNESS_NORM_FACE_WIDTH_PX,
+    SKIN_CB_RANGE,
+    SKIN_CR_RANGE,
+    SKIN_RATIO_MIN,
+    WB_GAIN_MAX,
+    WB_GAIN_MIN,
 )
 from facetrack.cv_pipeline import CVPipelineResult
+from facetrack.db import REGION_LABELS_ZH
 
 PoseMode = Literal["frontal", "profile_left", "profile_right"]
 
@@ -59,6 +79,8 @@ class QualityReport:
     pose: CheckResult
     exposure: CheckResult
     sharpness: CheckResult
+    lighting: CheckResult
+    skin: CheckResult
     color: CheckResult
     summary_zh: str = ""
     failure_reasons_zh: list[str] = field(default_factory=list)
@@ -114,18 +136,23 @@ class ConsistencyGate:
             `calibrated_image` is the input with white-balance applied if a
             gray-card / ArUco marker was detected, otherwise unchanged.
         """
+        face_crop = self._face_crop(pipeline_result)
         pose = self._check_pose(pipeline_result, pose_mode=pose_mode)
-        exposure = self._check_exposure(image_bgr)
-        sharpness = self._check_sharpness(image_bgr, pipeline_result)
+        exposure = self._check_exposure(image_bgr, face_crop)
+        sharpness = self._check_sharpness(image_bgr, face_crop, pipeline_result)
+        lighting = self._check_lighting(face_crop)
+        skin = self._check_skin_visibility(pipeline_result)
         color, calibrated = self._check_and_calibrate_color(image_bgr)
 
         failure_reasons = [
             check.reason
-            for check in (pose, exposure, sharpness, color)
+            for check in (pose, exposure, sharpness, lighting, skin, color)
             if not check.passed and check.reason
         ]
 
-        overall = pose.passed and exposure.passed and sharpness.passed
+        overall = (
+            pose.passed and exposure.passed and sharpness.passed and lighting.passed and skin.passed
+        )
         # Color failure (no marker detected) is a WARN, not a hard reject — many
         # clinics will adopt the marker later. We still report it.
         summary = (
@@ -137,11 +164,39 @@ class ConsistencyGate:
             pose=pose,
             exposure=exposure,
             sharpness=sharpness,
+            lighting=lighting,
+            skin=skin,
             color=color,
             summary_zh=summary,
             failure_reasons_zh=failure_reasons,
         )
         return report, calibrated
+
+    # -------- Face crop shared by the exposure / sharpness / lighting checks --------
+
+    @staticmethod
+    def _face_crop(pipeline_result: CVPipelineResult) -> np.ndarray | None:
+        """Face bounding-box crop from the pipeline's ALIGNED image.
+
+        The aligned image is the coordinate frame the landmarks live in (and,
+        since scale normalization, the only frame where landmark coordinates
+        are valid). It is also scale-normalized, which makes the sharpness
+        measurement resolution-invariant. Returns None when no usable face.
+        """
+        if not pipeline_result.face_detected or not pipeline_result.landmarks_px.size:
+            return None
+        image = pipeline_result.aligned_image
+        pts = pipeline_result.landmarks_px
+        x_min, y_min = pts.min(axis=0)
+        x_max, y_max = pts.max(axis=0)
+        h, w = image.shape[:2]
+        x1 = max(0, int(x_min))
+        y1 = max(0, int(y_min))
+        x2 = min(w, int(x_max))
+        y2 = min(h, int(y_max))
+        if x2 - x1 < 32 or y2 - y1 < 32:
+            return None
+        return image[y1:y2, x1:x2]
 
     # -------- Pose --------
 
@@ -238,26 +293,44 @@ class ConsistencyGate:
 
     # -------- Exposure --------
 
-    def _check_exposure(self, image_bgr: np.ndarray) -> CheckResult:
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    def _check_exposure(
+        self,
+        image_bgr: np.ndarray,
+        face_crop: np.ndarray | None = None,
+    ) -> CheckResult:
+        """Over/under-exposure check on the face crop (full-frame fallback).
+
+        Measured on the face because that is the region the scorer consumes:
+        a dark clinic wall must not reject a well-lit face, and a bright
+        window behind the patient must not reject a correctly exposed one.
+        """
+        target = face_crop if face_crop is not None else image_bgr
+        gray = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
         total = gray.size
         low_pct = float(np.count_nonzero(gray < 10) / total)
         high_pct = float(np.count_nonzero(gray > 245) / total)
         mean = float(gray.mean())
-        too_dark = low_pct > self.exposure_low_pct or mean < 60
-        too_bright = high_pct > self.exposure_high_pct or mean > 210
+        # On a face crop, pupils / eyebrows / nostrils are legitimately
+        # near-black, so the clipped-shadow budget is looser than full-frame;
+        # genuine underexposure trips the mean-brightness floor instead.
+        low_limit = EXPOSURE_LOW_PCT_FACE if face_crop is not None else self.exposure_low_pct
+        high_limit = EXPOSURE_HIGH_PCT_FACE if face_crop is not None else self.exposure_high_pct
+        too_dark = low_pct > low_limit or mean < 60
+        too_bright = high_pct > high_limit or mean > 210
         passed = not too_dark and not too_bright
         reason = ""
+        scope = "臉部" if face_crop is not None else ""
         if too_dark:
-            reason = f"曝光不足（暗部佔比 {low_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
+            reason = f"{scope}曝光不足（暗部佔比 {low_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
         elif too_bright:
-            reason = f"曝光過度（亮部佔比 {high_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
+            reason = f"{scope}曝光過度（亮部佔比 {high_pct * 100:.1f}%，平均亮度 {mean:.0f}/255）。"
         return CheckResult(
             passed=passed,
             measurement={
                 "mean_brightness": round(mean, 1),
                 "underexposed_pixel_ratio": round(low_pct, 4),
                 "overexposed_pixel_ratio": round(high_pct, 4),
+                "measured_on": "face_crop" if face_crop is not None else "full_frame",
             },
             reason=reason,
         )
@@ -267,52 +340,158 @@ class ConsistencyGate:
     def _check_sharpness(
         self,
         image_bgr: np.ndarray,
+        face_crop: np.ndarray | None = None,
         pipeline_result: CVPipelineResult | None = None,
     ) -> CheckResult:
-        """Laplacian-variance focus check.
+        """Resolution-normalized Laplacian-variance focus check.
 
-        Restricted to the face bounding box when landmarks are available — on a
-        webcam capture, a flat background (wall / desk) dominates pixel count
-        and dilutes the variance, making a perfectly-sharp face look "blurry".
-        Falls back to the full frame when no landmarks are present (so the
-        offline unit test for blurry-image rejection still works).
+        Two-part: (a) the native face width must clear a floor — a face
+        sampled below MIN_NATIVE_FACE_WIDTH_PX cannot carry comparable skin
+        texture no matter how "sharp" it looks after normalization;
+        (b) the crop is resized to a fixed width before measuring, so the
+        threshold means the same thing for a 4K DSLR photo and a 720p
+        webcam frame. (Unnormalized, the same face measures ~2.6x higher
+        at half the pixel pitch — the old threshold had to be re-tuned
+        every time the capture device changed.) Falls back to the full
+        frame when no landmarks are present.
         """
-        crop = image_bgr
-        used_face_crop = False
-        if (
-            pipeline_result is not None
-            and pipeline_result.face_detected
-            and pipeline_result.landmarks_px.size
-        ):
-            pts = pipeline_result.landmarks_px
-            x_min, y_min = pts.min(axis=0)
-            x_max, y_max = pts.max(axis=0)
-            h, w = image_bgr.shape[:2]
-            x1 = max(0, int(x_min))
-            y1 = max(0, int(y_min))
-            x2 = min(w, int(x_max))
-            y2 = min(h, int(y_max))
-            if x2 - x1 >= 32 and y2 - y1 >= 32:
-                crop = image_bgr[y1:y2, x1:x2]
-                used_face_crop = True
+        native_width = (
+            pipeline_result.native_face_width_px
+            if pipeline_result is not None and pipeline_result.face_detected
+            else 0.0
+        )
+        if face_crop is not None and 0.0 < native_width < MIN_NATIVE_FACE_WIDTH_PX:
+            return CheckResult(
+                passed=False,
+                measurement={
+                    "native_face_width_px": round(native_width, 1),
+                    "min_native_face_width_px": MIN_NATIVE_FACE_WIDTH_PX,
+                    "measured_on": "face_crop",
+                },
+                reason=(
+                    f"臉部影像過小（臉寬 {native_width:.0f}px，"
+                    f"最低 {MIN_NATIVE_FACE_WIDTH_PX:.0f}px）。"
+                    f"請靠近鏡頭或改用較高解析度拍攝。"
+                ),
+            )
+        crop = face_crop if face_crop is not None else image_bgr
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        target_w = SHARPNESS_NORM_FACE_WIDTH_PX
+        h, w = gray.shape[:2]
+        if w != target_w:
+            target_h = max(1, round(h * target_w / w))
+            interp = cv2.INTER_AREA if target_w < w else cv2.INTER_LINEAR
+            gray = cv2.resize(gray, (target_w, target_h), interpolation=interp)
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         passed = lap_var >= self.sharpness_min_var
         reason = ""
         if not passed:
             reason = (
-                f"影像模糊（Laplacian 變異數 {lap_var:.1f}，"
+                f"影像模糊（正規化 Laplacian 變異數 {lap_var:.1f}，"
                 f"門檻 {self.sharpness_min_var:.0f}），請穩定持機重拍。"
+            )
+        measurement = {
+            "laplacian_variance": round(lap_var, 2),
+            "threshold": self.sharpness_min_var,
+            "normalized_width_px": float(target_w),
+            "measured_on": "face_crop" if face_crop is not None else "full_frame",
+        }
+        if native_width > 0.0:
+            measurement["native_face_width_px"] = round(native_width, 1)
+        return CheckResult(passed=passed, measurement=measurement, reason=reason)
+
+    # -------- Lighting uniformity --------
+
+    def _check_lighting(self, face_crop: np.ndarray | None) -> CheckResult:
+        """Left/right brightness asymmetry on the face crop.
+
+        A side-lit face passes every per-pixel exposure statistic yet
+        systematically biases the left-cheek vs right-cheek comparison and
+        inflates uniformity/pigmentation on the shadow side — the exact
+        cross-visit noise this gate exists to block. Skipped (passes) when
+        no face is available; the pose check already owns that failure.
+        """
+        if face_crop is None:
+            return CheckResult(passed=True, measurement={"skipped": 1.0})
+        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+        half = gray.shape[1] // 2
+        if half == 0:
+            return CheckResult(passed=True, measurement={"skipped": 1.0})
+        left_mean = float(gray[:, :half].mean())
+        right_mean = float(gray[:, half:].mean())
+        asymmetry = abs(left_mean - right_mean) / max((left_mean + right_mean) / 2.0, 1.0)
+        passed = asymmetry <= LIGHTING_ASYMMETRY_MAX
+        reason = ""
+        if not passed:
+            brighter = "左" if left_mean > right_mean else "右"
+            reason = (
+                f"光照不均（{brighter}半臉較亮，左 {left_mean:.0f} vs 右 {right_mean:.0f}，"
+                f"不對稱度 {asymmetry:.2f}，容差 {LIGHTING_ASYMMETRY_MAX:.2f}）。"
+                f"請調整為正面均勻光源後重拍。"
             )
         return CheckResult(
             passed=passed,
             measurement={
-                "laplacian_variance": round(lap_var, 2),
-                "threshold": self.sharpness_min_var,
-                "measured_on": "face_crop" if used_face_crop else "full_frame",
+                "left_mean_brightness": round(left_mean, 1),
+                "right_mean_brightness": round(right_mean, 1),
+                "asymmetry_ratio": round(asymmetry, 3),
+                "threshold": LIGHTING_ASYMMETRY_MAX,
             },
             reason=reason,
         )
+
+    # -------- Skin visibility (occlusion) --------
+
+    def _check_skin_visibility(self, pipeline_result: CVPipelineResult) -> CheckResult:
+        """Per-ROI skin-pixel ratio via a YCrCb skin-color band.
+
+        MediaPipe happily reports landmarks over a surgical mask or
+        sunglasses, so ROI extraction alone cannot tell fabric from skin —
+        and the scorer would obediently score the fabric. Any ROI whose
+        skin ratio falls below SKIN_RATIO_MIN rejects the photo, naming the
+        occluded region. Skipped (passes) when no ROIs are available.
+        """
+        if not pipeline_result.face_detected or not pipeline_result.roi_bboxes:
+            return CheckResult(passed=True, measurement={"skipped": 1.0})
+        aligned = pipeline_result.aligned_image
+        measurement: dict[str, float] = {}
+        occluded_labels: list[str] = []
+        for region, (x, y, w, h) in pipeline_result.roi_bboxes.items():
+            crop = aligned[y : y + h, x : x + w]
+            mask = pipeline_result.roi_masks.get(region)
+            if crop.size == 0:
+                continue
+            ycrcb = cv2.cvtColor(crop, cv2.COLOR_BGR2YCrCb)
+            cr = ycrcb[..., 1]
+            cb = ycrcb[..., 2]
+            skin = (
+                (cr >= SKIN_CR_RANGE[0])
+                & (cr <= SKIN_CR_RANGE[1])
+                & (cb >= SKIN_CB_RANGE[0])
+                & (cb <= SKIN_CB_RANGE[1])
+            )
+            if mask is not None and mask.shape == skin.shape:
+                inside = mask.astype(bool)
+                ratio = float(skin[inside].mean()) if inside.any() else 0.0
+            else:
+                ratio = float(skin.mean())
+            measurement[f"skin_ratio_{region.value}"] = round(ratio, 3)
+            if ratio < SKIN_RATIO_MIN:
+                occluded_labels.append(REGION_LABELS_ZH.get(region, region.value))
+        if not measurement:
+            return CheckResult(passed=True, measurement={"skipped": 1.0})
+        measurement["min_skin_ratio"] = min(
+            v for k, v in measurement.items() if k.startswith("skin_ratio_")
+        )
+        measurement["threshold"] = SKIN_RATIO_MIN
+        passed = not occluded_labels
+        reason = ""
+        if not passed:
+            reason = (
+                f"偵測到遮擋：{('、'.join(occluded_labels))}區域皮膚可見度不足"
+                f"（門檻 {SKIN_RATIO_MIN:.0%}）。請移除口罩／墨鏡／頭髮遮擋後重拍。"
+            )
+        return CheckResult(passed=passed, measurement=measurement, reason=reason)
 
     # -------- Color calibration via ArUco gray-card --------
 
@@ -364,7 +543,13 @@ class ConsistencyGate:
             )
         avg_bgr = sampled.reshape(-1, 3).mean(axis=0)  # [B, G, R]
         avg_gray = float(avg_bgr.mean())
-        gains = avg_gray / np.clip(avg_bgr, 1.0, None)  # per-channel scale to neutral gray
+        raw_gains = avg_gray / np.clip(avg_bgr, 1.0, None)  # per-channel scale to neutral gray
+        # Clamp: a mis-sampled card (glare on the gray surround, marker on a
+        # colored sleeve) must not recolor the face harder than plausible
+        # clinic lighting — runaway gains would corrupt the erythema (a*)
+        # metric worse than skipping calibration entirely.
+        gains = np.clip(raw_gains, WB_GAIN_MIN, WB_GAIN_MAX)
+        gains_clamped = bool(np.any(gains != raw_gains))
         calibrated = np.clip(image_bgr.astype(np.float32) * gains, 0, 255).astype(np.uint8)
         return (
             CheckResult(
@@ -377,6 +562,7 @@ class ConsistencyGate:
                     "gain_b": round(float(gains[0]), 3),
                     "gain_g": round(float(gains[1]), 3),
                     "gain_r": round(float(gains[2]), 3),
+                    "gains_clamped": 1.0 if gains_clamped else 0.0,
                 },
                 reason="",
             ),

@@ -22,6 +22,12 @@ from loguru import logger
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
+from facetrack.config import (
+    MAX_ALIGNED_PIXELS,
+    NORMALIZED_FACE_WIDTH_PX,
+    SCALE_FACTOR_MAX,
+    SCALE_FACTOR_MIN,
+)
 from facetrack.db import Region
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "face_landmarker.task"
@@ -55,6 +61,13 @@ class CVPipelineResult:
     roi_polygons: dict[Region, np.ndarray] = field(default_factory=dict)
     roi_masks: dict[Region, np.ndarray] = field(default_factory=dict)
     face_detected: bool = True
+    # Rescale factor applied during alignment so the anatomical face width
+    # equals NORMALIZED_FACE_WIDTH_PX (recorded for the quality report/audit).
+    scale_factor: float = 1.0
+    # Anatomical face width (landmark 234 <-> 454) as DETECTED, before scale
+    # normalization. The gate rejects photos below MIN_NATIVE_FACE_WIDTH_PX —
+    # upscaling cannot fabricate skin texture that was never sampled.
+    native_face_width_px: float = 0.0
 
     @classmethod
     def no_face(cls) -> CVPipelineResult:
@@ -110,7 +123,10 @@ class FacePipeline:
         if landmarks_px is None:
             return CVPipelineResult.no_face()
 
-        aligned, aligned_landmarks = self._align_face(image_bgr, landmarks_px)
+        native_face_width = float(
+            np.linalg.norm(landmarks_px[LANDMARK_FACE_LEFT] - landmarks_px[LANDMARK_FACE_RIGHT])
+        )
+        aligned, aligned_landmarks, scale_factor = self._align_face(image_bgr, landmarks_px)
 
         rois: dict[Region, np.ndarray] = {}
         bboxes: dict[Region, tuple[int, int, int, int]] = {}
@@ -147,6 +163,8 @@ class FacePipeline:
             roi_polygons=polygons,
             roi_masks=masks,
             face_detected=True,
+            scale_factor=scale_factor,
+            native_face_width_px=native_face_width,
         )
 
     def process_file(self, image_path: str | Path) -> CVPipelineResult:
@@ -173,7 +191,16 @@ class FacePipeline:
 
     def _align_face(
         self, image_bgr: np.ndarray, landmarks_px: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Rotate the face level AND rescale it to a fixed anatomical width.
+
+        Scale normalization is what makes the scoring metrics comparable
+        across visits: all five metrics use fixed pixel-size kernels, so
+        without it the same skin photographed closer / at higher resolution
+        scores differently. The scale is clamped to a sane band and the
+        output canvas is capped so a degenerate detection cannot allocate
+        an absurd image.
+        """
         left_eye = landmarks_px[LANDMARK_LEFT_EYE_OUTER]
         right_eye = landmarks_px[LANDMARK_RIGHT_EYE_OUTER]
         dy = float(right_eye[1] - left_eye[1])
@@ -183,13 +210,28 @@ class FacePipeline:
         center = (float(eye_center[0]), float(eye_center[1]))
 
         h, w = image_bgr.shape[:2]
-        rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-        aligned = cv2.warpAffine(image_bgr, rotation_matrix, (w, h), flags=cv2.INTER_LINEAR)
+        face_width = float(
+            np.linalg.norm(landmarks_px[LANDMARK_FACE_LEFT] - landmarks_px[LANDMARK_FACE_RIGHT])
+        )
+        scale = 1.0
+        if face_width > 1e-3:
+            scale = NORMALIZED_FACE_WIDTH_PX / face_width
+        scale = min(max(scale, SCALE_FACTOR_MIN), SCALE_FACTOR_MAX)
+        if w * h * scale * scale > MAX_ALIGNED_PIXELS:
+            scale = (MAX_ALIGNED_PIXELS / (w * h)) ** 0.5
+        new_w = max(1, round(w * scale))
+        new_h = max(1, round(h * scale))
+
+        matrix = cv2.getRotationMatrix2D(center, angle, scale)
+        # Re-center so the scaled image lands inside the new canvas.
+        matrix[0, 2] += new_w / 2 - center[0]
+        matrix[1, 2] += new_h / 2 - center[1]
+        aligned = cv2.warpAffine(image_bgr, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR)
 
         ones = np.ones((landmarks_px.shape[0], 1), dtype=np.float32)
         landmarks_homo = np.hstack([landmarks_px, ones])
-        aligned_landmarks = landmarks_homo @ rotation_matrix.T
-        return aligned, aligned_landmarks.astype(np.float32)
+        aligned_landmarks = landmarks_homo @ matrix.T
+        return aligned, aligned_landmarks.astype(np.float32), scale
 
     def _region_polygon(
         self,

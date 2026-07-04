@@ -12,7 +12,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine
 
-from facetrack.config import DB_URL
+from facetrack.config import DB_URL, SCORING_VERSION
 
 
 # NOTE: Using (str, Enum) instead of StrEnum because SQLModel + SQLAlchemy column
@@ -33,6 +33,16 @@ class Region(str, Enum):  # noqa: UP042
     RIGHT_CHEEK = "right_cheek"
     FOREHEAD = "forehead"
     CHIN = "chin"
+
+
+# Single source of truth for the UI-facing region names (used by app.py and
+# by the gate's skin-visibility rejection reasons).
+REGION_LABELS_ZH: dict[Region, str] = {
+    Region.LEFT_CHEEK: "左頰",
+    Region.RIGHT_CHEEK: "右頰",
+    Region.FOREHEAD: "額頭",
+    Region.CHIN: "下巴",
+}
 
 
 class Patient(SQLModel, table=True):
@@ -70,6 +80,9 @@ class Visit(SQLModel, table=True):
     photo_right_path: str | None = Field(default=None, nullable=True)
     quality_passed: bool = False
     quality_report_json: str = "{}"
+    # Which version of the deterministic scoring formula produced this
+    # visit's scores. Pre-v2 rows are backfilled to 1 by init_db().
+    scoring_version: int = Field(default=SCORING_VERSION)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     patient: Patient | None = Relationship(back_populates="visits")
@@ -114,6 +127,7 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_add_visit_side_photo_columns()
     _migrate_add_patient_is_active_column()
+    _migrate_add_visit_scoring_version_column()
 
 
 def _migrate_add_visit_side_photo_columns() -> None:
@@ -142,6 +156,21 @@ def _migrate_add_patient_is_active_column() -> None:
         if "is_active" not in cols:
             conn.execute(
                 text("ALTER TABLE patient ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL")
+            )
+
+
+def _migrate_add_visit_scoring_version_column() -> None:
+    """Backfill `scoring_version` on pre-existing visit rows.
+
+    Existing rows were scored by the v1 formula, so the column default is 1
+    — NOT the current SCORING_VERSION. New rows get the current version from
+    the SQLModel field default at insert time.
+    """
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info('visit')"))}
+        if "scoring_version" not in cols:
+            conn.execute(
+                text("ALTER TABLE visit ADD COLUMN scoring_version INTEGER DEFAULT 1 NOT NULL")
             )
 
 

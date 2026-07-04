@@ -192,3 +192,206 @@ def test_quality_report_serialises_to_json_compatible_dict() -> None:
     assert "exposure" in serialized
     assert "sharpness" in serialized
     assert "color" in serialized
+    assert "lighting" in serialized
+    assert "skin" in serialized
+
+
+# -------- Gate v2: face-crop exposure --------
+
+
+def _result_with_landmark_box(
+    aligned: np.ndarray, x1: int, y1: int, x2: int, y2: int
+) -> CVPipelineResult:
+    """A pipeline result whose landmarks span the given box on `aligned`.
+
+    The gate's face-crop checks (exposure / sharpness / lighting) read from
+    the pipeline's aligned image — the frame the landmark coordinates and
+    the scorer's ROIs live in.
+    """
+    pts = np.array(
+        [[x1, y1], [x2, y1], [x1, y2], [x2, y2]],
+        dtype=np.float32,
+    )
+    return CVPipelineResult(
+        aligned_image=aligned,
+        landmarks_px=pts,
+        face_detected=True,
+    )
+
+
+def test_exposure_measured_on_face_crop_when_landmarks_present() -> None:
+    """A well-lit face on a dark clinic background must pass exposure.
+
+    Full-frame measurement rejects this photo (dark wall dominates pixel
+    count); the metric that matters for skin scoring is the face itself.
+    """
+    gate = ConsistencyGate()
+    img = np.full((512, 512, 3), 5, dtype=np.uint8)  # dark background
+    img[100:400, 100:400] = 170  # well-lit face region
+    report, _ = gate.evaluate(img, _result_with_landmark_box(img, 100, 100, 400, 400))
+
+    assert report.exposure.passed is True
+    assert report.exposure.measurement["measured_on"] == "face_crop"
+
+
+def test_exposure_face_crop_overexposed_is_rejected() -> None:
+    """A blown-out face must fail exposure even when the background is fine."""
+    gate = ConsistencyGate()
+    img = np.full((512, 512, 3), 128, dtype=np.uint8)
+    img[100:400, 100:400] = 252  # clipped face
+    report, _ = gate.evaluate(img, _result_with_landmark_box(img, 100, 100, 400, 400))
+
+    assert report.exposure.passed is False
+    assert "曝光過度" in report.exposure.reason
+
+
+# -------- Gate v2: lighting uniformity --------
+
+
+def test_lighting_asymmetry_is_rejected() -> None:
+    """A side-lit face (one half bright, one half dark) corrupts the
+    left-cheek vs right-cheek comparison and must be rejected."""
+    gate = ConsistencyGate()
+    img = np.full((512, 512, 3), 128, dtype=np.uint8)
+    img[100:400, 100:250] = 210  # bright left half of face
+    img[100:400, 250:400] = 70  # shadowed right half
+    report, _ = gate.evaluate(img, _result_with_landmark_box(img, 100, 100, 400, 400))
+
+    assert report.lighting.passed is False
+    assert "光照不均" in report.lighting.reason
+    assert report.overall_passed is False
+
+
+def test_lighting_uniform_face_passes() -> None:
+    """Evenly lit face passes the lighting-uniformity check."""
+    gate = ConsistencyGate()
+    img = np.full((512, 512, 3), 5, dtype=np.uint8)
+    img[100:400, 100:400] = 160
+    report, _ = gate.evaluate(img, _result_with_landmark_box(img, 100, 100, 400, 400))
+
+    assert report.lighting.passed is True
+
+
+def test_lighting_check_skipped_without_face() -> None:
+    """No landmarks -> lighting check is skipped (pose already fails)."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _no_face_result())
+
+    assert report.lighting.passed is True
+    assert report.lighting.measurement.get("skipped") == 1.0
+
+
+# -------- Gate v2: resolution-normalized sharpness --------
+
+
+def test_sharpness_is_resolution_invariant() -> None:
+    """The same face content at 1x and 2x pixel density must yield (near-)
+    identical sharpness measurements after normalization — the threshold must
+    not depend on which camera took the photo."""
+    import cv2
+
+    gate = ConsistencyGate()
+    rng = np.random.default_rng(5)
+    base = rng.integers(90, 190, size=(256, 256, 3), dtype=np.uint8)
+    big = cv2.resize(base, (512, 512), interpolation=cv2.INTER_NEAREST)
+
+    report_base, _ = gate.evaluate(base, _result_with_landmark_box(base, 0, 0, 256, 256))
+    report_big, _ = gate.evaluate(big, _result_with_landmark_box(big, 0, 0, 512, 512))
+
+    var_base = report_base.sharpness.measurement["laplacian_variance"]
+    var_big = report_big.sharpness.measurement["laplacian_variance"]
+    assert report_base.sharpness.passed is True
+    assert report_big.sharpness.passed is True
+    assert abs(var_base - var_big) / max(var_base, 1e-6) < 0.05
+
+
+# -------- Gate v2: skin-visibility (occlusion) --------
+
+SKIN_BGR = (120, 160, 210)  # plausible skin tone, inside the YCrCb skin band
+FABRIC_BGR = (200, 140, 80)  # surgical-mask blue, far outside the skin band
+
+
+def _result_with_rois(roi_colors: dict) -> CVPipelineResult:
+    """Pipeline result with one 64x64 ROI per region, filled with a solid color."""
+
+    aligned = np.full((300, 300, 3), SKIN_BGR, dtype=np.uint8)
+    bboxes = {}
+    masks = {}
+    x = 10
+    for region, color in roi_colors.items():
+        aligned[10:74, x : x + 64] = color
+        bboxes[region] = (x, 10, 64, 64)
+        masks[region] = np.full((64, 64), 255, dtype=np.uint8)
+        x += 70
+    pts = np.array([[0, 0], [300, 0], [0, 300], [300, 300]], dtype=np.float32)
+    return CVPipelineResult(
+        aligned_image=aligned,
+        landmarks_px=pts,
+        face_detected=True,
+        roi_bboxes=bboxes,
+        roi_masks=masks,
+    )
+
+
+def test_skin_visibility_rejects_occluded_roi() -> None:
+    """A chin ROI full of mask fabric must be rejected, naming the region."""
+    from facetrack.db import Region
+
+    gate = ConsistencyGate()
+    result = _result_with_rois({Region.LEFT_CHEEK: SKIN_BGR, Region.CHIN: FABRIC_BGR})
+    img = np.full((512, 512, 3), 150, dtype=np.uint8)
+    report, _ = gate.evaluate(img, result)
+
+    assert report.skin.passed is False
+    assert "遮擋" in report.skin.reason
+    assert "下巴" in report.skin.reason
+    assert report.overall_passed is False
+
+
+def test_skin_visibility_passes_on_real_skin_tones() -> None:
+    """All-skin ROIs pass the visibility check."""
+    from facetrack.db import Region
+
+    gate = ConsistencyGate()
+    result = _result_with_rois({Region.LEFT_CHEEK: SKIN_BGR, Region.CHIN: SKIN_BGR})
+    img = np.full((512, 512, 3), 150, dtype=np.uint8)
+    report, _ = gate.evaluate(img, result)
+
+    assert report.skin.passed is True
+
+
+def test_skin_visibility_skipped_without_rois() -> None:
+    """No ROIs (no face) -> skin check is skipped, pose carries the failure."""
+    gate = ConsistencyGate()
+    img = _mid_gray_image_with_face_passable_brightness()
+    report, _ = gate.evaluate(img, _no_face_result())
+
+    assert report.skin.passed is True
+    assert report.skin.measurement.get("skipped") == 1.0
+
+
+# -------- Gate v2: white-balance gain clamp --------
+
+
+def test_white_balance_gains_are_clamped() -> None:
+    """An extreme color cast must not produce runaway per-channel gains —
+    a mis-sampled gray card would otherwise recolor the face and corrupt
+    the erythema (a*) metric more than no calibration at all."""
+    import cv2
+
+    from facetrack.config import WB_GAIN_MAX, WB_GAIN_MIN
+
+    gate = ConsistencyGate()
+    # Strong blue cast background with a real ArUco marker embedded.
+    img = np.full((400, 400, 3), (200, 80, 40), dtype=np.uint8)
+    marker = cv2.aruco.generateImageMarker(
+        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50), 1, 100
+    )
+    img[150:250, 150:250] = cv2.cvtColor(marker, cv2.COLOR_GRAY2BGR)
+    report, calibrated = gate.evaluate(img, _no_face_result())
+
+    if report.color.measurement.get("marker_detected") == 1.0:
+        for key in ("gain_b", "gain_g", "gain_r"):
+            gain = report.color.measurement[key]
+            assert WB_GAIN_MIN <= gain <= WB_GAIN_MAX, f"{key}={gain} outside clamp"

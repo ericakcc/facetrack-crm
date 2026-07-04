@@ -2,7 +2,7 @@
 
 **Author**: Eric Tsou
 **For**: AI Fund Engineer in Residence — Build Challenge (companion to PRD / TDD / BUILD_NOTES)
-**Date**: 2026-05-17
+**Date**: 2026-05-17 · **Updated**: 2026-07-04 (§2 occlusion check shipped in Gate v2; §4 gained a v2 note)
 
 This document exists because every "AI for medical imaging" product I've
 seen at this maturity level silently fails on edge cases and ships
@@ -39,24 +39,29 @@ for routine progress photos.
 
 ---
 
-## 2. Partial occlusion (face mask, hand, hair, sunglasses)
+## 2. Partial occlusion (face mask, hand, hair, sunglasses) — ✅ shipped in v2
 
-**What breaks**
+**What broke (v1)**
 MediaPipe will often still report a high-confidence face landmark when a
-mask or hand covers the lower half. The ROI extraction then crops empty
-ROIs over the obstruction (chin / lower cheek) and feeds them to the
-scorer, which obediently returns scores for whatever was inside the
-bounding box — usually fabric, not skin.
+mask or hand covers the lower half. The ROI extraction then cropped ROIs
+over the obstruction (chin / lower cheek) and fed them to the scorer,
+which obediently returned scores for whatever was inside the bounding
+box — usually fabric, not skin.
 
-**Why our gate can't catch it**
-We trust the face-detection confidence. There is no per-ROI "is this
-actually skin?" check.
+**What shipped (v2)**
+The gate now runs a per-ROI **skin-visibility check**: a YCrCb skin-color
+band, measured inside each anatomical ROI polygon. Any ROI below a 35 %
+skin-pixel ratio rejects the photo, naming the region ("偵測到遮擋：下巴
+區域皮膚可見度不足"). Measured on the reference set: real-face ROIs
+score ≥ 0.50 (worst case: a shadowed cheek), mask fabric / sunglasses
+score 0.00 — a wide margin on both sides of the threshold.
 
-**Phase-2 mitigation**
-Add an `is_skin` filter per ROI: a fast HSV-range mask combined with a
-texture-entropy threshold. ROIs that fall below the skin-pixel ratio
-threshold (say 70 %) are dropped from the aggregate and the report
-notes "右頰因遮擋未納入評分".
+**Remaining caveats**
+Skin-colored occluders (a hand, a beige scarf) can still pass; the YCrCb
+band is tuned on Fitzpatrick II–IV faces and must be re-validated for
+V–VI before a broader rollout (see §4); and the check rejects the whole
+photo rather than dropping the single occluded ROI from the aggregate —
+per-ROI exclusion with a "右頰因遮擋未納入評分" note remains Phase-2 UX.
 
 ---
 
@@ -103,6 +108,14 @@ ranges as module-level constants — re-calibration is one tuple edit, not
 a retrain). Detect Fitzpatrick type from the first-visit photo via
 mean LAB-L on the cheek ROI, and select the matching range table at
 score time.
+
+**v2 note**: the new skin-visibility gate check (see §2) uses a YCrCb
+skin-color band calibrated on the same Fitzpatrick II–IV reference set —
+it inherits this same bias and must be re-validated on V–VI faces
+*before* the occlusion check is enabled for those populations, or dark
+skin could be falsely flagged as "occluded". The scoring-side exclusion
+band (deep-shadow L\* < 20) is conservative enough that healthy V–VI
+skin (typical L\* ≫ 60) is unaffected.
 
 ---
 

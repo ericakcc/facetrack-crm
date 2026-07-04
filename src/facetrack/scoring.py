@@ -13,6 +13,12 @@ range observed on healthy adult faces. The ranges are intentionally
 documented as constants so they can be re-calibrated when a clinic
 provides its own training distribution.
 
+v2 (SCORING_VERSION = 2): every metric is computed on an *effective* mask
+that excludes specular-glare (L* > SPECULAR_L_MAX) and deep-shadow
+(L* < SHADOW_L_MIN) pixels, and the upstream pipeline rescales each face to
+a fixed anatomical width — see cv_pipeline._align_face. Formula changes
+bump SCORING_VERSION; the value is persisted per visit.
+
 Score convention:
     * pigmentation / erythema / wrinkle / pore — HIGHER = more concern
     * uniformity                                — HIGHER = more uniform (better)
@@ -27,15 +33,47 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from facetrack.config import SCORING_VERSION
 from facetrack.db import Region
 
-# Empirical raw-metric ranges, calibrated on a small reference set of
-# pipeline-aligned + CLAHE-normalized ROI crops at ~1024px face width.
+__all__ = [
+    "SCORING_VERSION",
+    "RawMetrics",
+    "RegionScores",
+    "aggregate_face_scores",
+    "erythema_raw",
+    "pigmentation_raw",
+    "pore_raw",
+    "score_region",
+    "score_visit",
+    "uniformity_raw",
+    "wrinkle_raw",
+]
+
+# Pixels outside this L* band (OpenCV LAB, 0-255) are excluded from every
+# metric: above the ceiling is specular glare (clinic downlights, oily
+# T-zone shine — lighting artifact, not skin), below the floor is deep
+# shadow / hair / occluder. Glare previously counted as "non-uniform tone"
+# and its rim as "edges"; near-black blobs counted as melanin spots.
+SPECULAR_L_MAX = 235
+SHADOW_L_MIN = 20
+# If exclusion would remove more than this fraction of the ROI, fall back to
+# the unrefined mask — scoring a near-empty region is worse than scoring a
+# glary one (the gate's exposure check owns that failure mode).
+EXCLUSION_MIN_KEEP_RATIO = 0.3
+
+# Empirical raw-metric ranges, calibrated on the 5 evenly-lit reference
+# faces in data/test_images at the v2 normalization scale (every face
+# rescaled to NORMALIZED_FACE_WIDTH_PX = 512 before ROI extraction, so the
+# ranges are stable across camera resolution and subject distance).
+# Wrinkle/pore shifted upward vs v1 because texture-density ratios grow at
+# the smaller sampling scale (fixed 3x3/5x5 kernels cover relatively larger
+# anatomy); pigmentation/erythema/uniformity distributions were unchanged.
 # Re-calibrate when a clinic provides its own training distribution.
 PIGMENTATION_RAW_RANGE = (0.02, 0.30)
 ERYTHEMA_RAW_RANGE = (134.0, 148.0)
-WRINKLE_RAW_RANGE = (0.10, 0.50)
-PORE_RAW_RANGE = (0.01, 0.15)
+WRINKLE_RAW_RANGE = (0.25, 0.75)
+PORE_RAW_RANGE = (0.03, 0.22)
 UNIFORMITY_RAW_RANGE = (12.0, 50.0)
 
 
@@ -80,6 +118,26 @@ def _clamp_score(value: float, lo: float, hi: float, *, invert: bool = False) ->
     return round(normalized * 10.0, 2)
 
 
+def _effective_mask(bgr: np.ndarray, roi_mask: np.ndarray | None) -> np.ndarray | None:
+    """Refine `roi_mask` by excluding specular-glare and deep-shadow pixels.
+
+    Returns the refined mask, or the original mask unchanged when exclusion
+    would remove more than (1 - EXCLUSION_MIN_KEEP_RATIO) of the region.
+    """
+    lightness = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)[..., 0]
+    valid = ((lightness >= SHADOW_L_MIN) & (lightness <= SPECULAR_L_MAX)).astype(np.uint8)
+    # Erode by 1px: the transition ring around a glare/shadow blob is a mix
+    # of artifact and skin, and its steep gradient is exactly what the edge/
+    # morphology metrics mistake for texture.
+    valid = cv2.erode(valid, np.ones((3, 3), dtype=np.uint8))
+    base = np.ones(bgr.shape[:2], dtype=bool) if roi_mask is None else roi_mask.astype(bool)
+    refined = base & valid.astype(bool)
+    base_count = int(base.sum())
+    if base_count == 0 or int(refined.sum()) < EXCLUSION_MIN_KEEP_RATIO * base_count:
+        return roi_mask
+    return refined.astype(np.uint8) * 255
+
+
 def _ratio_inside(fire: np.ndarray, roi_mask: np.ndarray | None) -> float:
     """Pixel ratio of `fire` restricted to `roi_mask` (or whole crop if None)."""
     if roi_mask is None:
@@ -112,15 +170,20 @@ def pigmentation_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> flo
     enclosing bounding box).
     """
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    # Denoise before morphology (same 3x3 Gaussian the wrinkle metric uses):
+    # the black-hat cutoff otherwise counts sensor/CLAHE noise, whose level
+    # varies with the input's downscale factor — measured as a ~25% raw drift
+    # between full- and half-resolution captures of the same face.
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
-    return _ratio_inside(blackhat > 18, roi_mask)
+    blackhat = cv2.morphologyEx(blurred, cv2.MORPH_BLACKHAT, kernel)
+    return _ratio_inside(blackhat > 18, _effective_mask(bgr, roi_mask))
 
 
 def erythema_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
     """Mean a* channel value in CIE Lab. Higher = redder."""
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    return _stat_inside(lab[..., 1], roi_mask, op="mean")
+    return _stat_inside(lab[..., 1], _effective_mask(bgr, roi_mask), op="mean")
 
 
 def wrinkle_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
@@ -130,7 +193,7 @@ def wrinkle_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
     gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
     magnitude = np.sqrt(gx * gx + gy * gy)
-    return _ratio_inside(magnitude > 30, roi_mask)
+    return _ratio_inside(magnitude > 30, _effective_mask(bgr, roi_mask))
 
 
 def pore_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
@@ -138,13 +201,13 @@ def pore_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     blurred = cv2.GaussianBlur(gray, (5, 5), sigmaX=1.4)
     log_response = cv2.Laplacian(blurred, cv2.CV_32F, ksize=3)
-    return _ratio_inside(log_response > 0.045, roi_mask)
+    return _ratio_inside(log_response > 0.045, _effective_mask(bgr, roi_mask))
 
 
 def uniformity_raw(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> float:
     """Standard deviation of the L* channel. Higher = less uniform."""
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    return _stat_inside(lab[..., 0], roi_mask, op="std")
+    return _stat_inside(lab[..., 0], _effective_mask(bgr, roi_mask), op="std")
 
 
 def score_region(bgr: np.ndarray, roi_mask: np.ndarray | None = None) -> RegionScores:

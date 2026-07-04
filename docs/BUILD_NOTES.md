@@ -135,15 +135,19 @@ clinic-ready" claims with numbers. Fair. Both tables below are
 reproducible from the repo:
 
 **End-to-end latency** (`uv run python scripts/benchmark.py`, M4 Pro
-MacBook, macOS 15.6, Python 3.14, 3 CC0 faces × 5 runs each, ~1024 px
-face width, MediaPipe Tasks on CPU via XNNPACK):
+MacBook, macOS 15.6, 3 CC0 faces × 5 runs each, MediaPipe Tasks on CPU
+via XNNPACK; re-measured 2026-07-04 after the v2 gate + scoring changes):
 
 | Stage | mean | p50 | p95 |
 |---|---:|---:|---:|
-| Pipeline (MediaPipe align + ROI crop) | 8.6 ms | 8.4 | 9.5 |
-| Consistency gate (4 checks) | 6.7 ms | 6.4 | 6.9 |
-| Scoring (5 metrics × 4 ROIs) | 4.3 ms | 4.4 | 4.6 |
-| **Total (no LLM)** | **19.6 ms** | **18.9** | **20.0** |
+| Pipeline (MediaPipe align + 512px scale-norm + ROI crop) | 7.8 ms | 7.7 | 8.1 |
+| Consistency gate (6 checks) | 6.3 ms | 6.3 | 6.6 |
+| Scoring (5 metrics × 4 ROIs, glare/shadow-masked) | 7.6 ms | 7.6 | 8.1 |
+| **Total (no LLM)** | **21.7 ms** | **21.6** | **22.5** |
+
+(v1 measured 18.9 ms p50 with 4 checks and no effective-mask exclusion —
+the two new gate checks and the per-metric exclusion masks cost ~2.7 ms,
+still ~70× under a 60 fps frame budget.)
 
 The LLM call is the only network hop and is excluded — at typical
 Sonnet 4.6 latency it dominates the total and varies with the network,
@@ -158,15 +162,25 @@ qualitative gap is what matters, not the exact baseline number:
 
 | Metric | σ (deterministic CV) | σ (simulated LLM baseline) |
 |---|---:|---:|
-| pigmentation | 0.103 | 0.598 |
-| erythema | 0.137 | 0.566 |
-| wrinkle | 0.000 | 0.435 |
-| pore | 0.000 | 0.298 |
-| uniformity | 0.131 | 0.793 |
-| **mean σ̄** | **0.074** | **0.538** |
+| pigmentation | 0.286 | 0.988 |
+| erythema | 0.139 | 0.565 |
+| wrinkle | 0.209 | 0.794 |
+| pore | 0.232 | 0.595 |
+| uniformity | 0.119 | 0.792 |
+| **mean σ̄** | **0.197** | **0.747** |
 
-~7× tighter than a representative stochastic grader. This is what
+~4× tighter than a representative stochastic grader. This is what
 "tracks consistently across visits" means in numbers.
+
+An honesty note, because the v1 table looked "better" (σ̄ 0.074): two of
+v1's five σ values were exactly 0.000 because the wrinkle and pore
+scores were **saturated at 10.0** on the reference face — a clamped
+score cannot vary, so that part of the v1 figure was range
+mis-calibration masquerading as robustness. The v2 ranges put scores
+mid-band where perturbation sensitivity is real and visible. The number
+that actually matters for longitudinal tracking moved the right way:
+**cross-resolution drift on the same face fell from up to 5.5 points
+(v1) to ≤ 1.05 points (v2)** — see Session 4 below for the mechanism.
 
 ## 5. Trade-offs I made deliberately
 
@@ -261,6 +275,96 @@ the local DB only; the Streamlit Cloud build re-seeds from scratch and
 will not include them. I am disclosing this in the build note rather
 than hiding it because the alternative (changing the code to make the
 demo look smooth) is the worse signal.
+
+### Session 4 — Gate v2 + Scoring v2 (2026-07-04)
+
+A systematic hardening pass over the two core features, driven by
+measurements on the reference faces rather than intuition. Every
+threshold below was calibrated against `data/test_images` first; the
+"before" numbers are in the calibration notes, the "after" numbers in
+§4 above. 71 → 92 tests.
+
+**The headline bug: scores depended on camera distance.** All five
+metrics use fixed pixel-size kernels, but nothing fixed the pixel size
+of a face. Measured: the *same photo* downscaled to 0.5× moved pore
+from 4.94 to 10.00 and wrinkle from 2.22 to 5.69 — i.e. a patient
+photographed with a newer phone (or 20 cm closer) would appear to get
+worse skin. For a product whose one promise is cross-visit
+comparability, this was the highest-severity defect in the codebase.
+Fix (three parts, each necessary):
+
+1. **Scale normalization** — the alignment warp now also rescales the
+   face so the anatomical width (landmark 234 ↔ 454) is exactly 512 px
+   before ROI extraction. One warp, no extra resample.
+2. **512, not 1024** — first attempt normalized to 1024 px (the scale
+   the v1 ranges were nominally calibrated at) and the drift persisted,
+   because a 500 px webcam face *upscaled* to 1024 has no detail above
+   its native sampling — interpolation fabricates smoothness, not skin.
+   512 is the lowest-common-denominator: every accepted photo reaches
+   it by downscaling (or ≤ 1.28× upscale), so all inputs share the same
+   detail ceiling.
+3. **Native face-width floor (400 px) at the gate** — inputs that
+   cannot reach 512 honestly are rejected with "臉部影像過小，請靠近
+   鏡頭", not scored. 400 sits under the live-capture widget's own
+   face-fill floor (448 px), so no auto-captured frame is affected.
+
+Residual drift after 1+2+3 was concentrated in pigmentation, and
+diagnosing it found a real formula bug: black-hat was the only metric
+computed **without a denoise step**, so its fixed cutoff (>18) was
+counting sensor/CLAHE noise — whose amplitude varies with the
+downscale factor. Adding the same 3×3 Gaussian the wrinkle metric
+already used dropped cross-resolution drift to ≤ 1.05 points across
+the reference set (from up to 5.5 pre-v2).
+
+**Gate v2 — two new checks, three fixed ones:**
+
+* **Exposure now measures the face, not the frame.** Full-frame stats
+  rejected `test_face_3` (bright wall, correctly-exposed face) and
+  under-reported `test_face_1` (blown-out face, mid-tone wall). Face
+  crops get a looser near-black budget (6 % vs 2 %) because pupils /
+  eyebrows / nostrils are legitimately near-black — measured 2.2–3.2 %
+  on healthy faces, which the old threshold would have failed.
+* **Sharpness is resolution-normalized** (face crop resized to 256 px
+  wide before the Laplacian). The v1 threshold whiplashed 80 → 30 when
+  the capture device changed; normalized, sharp faces measure 87–494
+  vs 1.9–3.7 for blurred — a 20× separation band that no longer moves
+  with the camera.
+* **Lighting uniformity (new).** Left/right face-brightness asymmetry
+  > 0.25 rejects. Measured separation: evenly-lit 0.065–0.143 vs
+  side-lit 0.31–0.52. Side light is the most common real clinic
+  failure (window seating) and it directly biases the left-vs-right
+  cheek comparison — no per-pixel exposure stat catches it.
+* **Skin visibility (new).** Per-ROI YCrCb skin-pixel ratio < 0.35
+  rejects, naming the region. This ships LIMITATIONS §2's occlusion
+  plan: real-face ROIs measure ≥ 0.50, mask fabric / sunglasses 0.00.
+  A masked selfie previously passed every check and scored the fabric.
+* **White-balance gains clamped to [0.6, 1.8]** — a glare-corrupted
+  gray-card sample could previously recolor the whole image by an
+  unbounded factor, corrupting erythema worse than no calibration.
+
+**Scoring v2 — measure skin, not lighting artifacts:**
+
+* Every metric now runs on an **effective mask** = ROI polygon minus
+  specular pixels (L\* > 235) and deep shadow (L\* < 20), eroded 1 px to
+  drop the artifact-to-skin transition ring. Forehead glare was being
+  scored as "non-uniform tone" and its rim as "edges"; near-black hair
+  strands as melanin.
+* **Calibrated pixels are now the scored pixels.** When the gray-card
+  fires, the pipeline re-runs on the calibrated image before scoring.
+  Previously the calibrated photo was *saved* but the *uncalibrated*
+  ROIs were scored — so re-scoring a stored photo would not reproduce
+  its stored score, quietly breaking the reproducibility contract the
+  TDD §3 promises (and the erythema metric never actually received the
+  color correction it was documented to rely on).
+* **`SCORING_VERSION` (= 2) persisted per visit**, with a zero-downtime
+  migration backfilling old rows to 1. Changing a formula and letting
+  new numbers mingle with old ones in the same chart is the silent way
+  to destroy the longitudinal record; the version column makes formula
+  changes visible and chart annotations possible.
+* Wrinkle/pore ranges re-fitted to the 512 px scale on the five
+  evenly-lit reference faces (`WRINKLE 0.10–0.50 → 0.25–0.75`,
+  `PORE 0.01–0.15 → 0.03–0.22`); pigmentation / erythema / uniformity
+  distributions were unchanged and keep their v1 ranges.
 
 ## 7. What I cut for time
 

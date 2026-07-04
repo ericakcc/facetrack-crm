@@ -16,7 +16,7 @@
 Reproduce the headline numbers from the BUILD_NOTES tables yourself:
 
 ```bash
-uv run python scripts/benchmark.py                 # latency table (M4 Pro: 18.9 ms p50)
+uv run python scripts/benchmark.py                 # latency table (M4 Pro: 21.6 ms p50)
 uv run python scripts/reproducibility_evidence.py  # σ̄ comparison + figure
 ```
 
@@ -49,11 +49,14 @@ Three decisions separate this prototype from "yet another Vision-LLM wrapper":
    meaningful longitudinal chart.
 
 2. **A Photo-Consistency Gate rejects bad intakes _before_ they reach scoring.**
-   This is the prototype's depth area. Four checks: pose (yaw/pitch/roll ±15°
-   frontal, ±5° profile), exposure (over/under), sharpness (Laplacian variance
-   on the face-bbox crop), and color (ArUco gray-card white balance). A failed
-   photo is rejected with a 繁中 reason ("頭部右偏 18°，請正對鏡頭"). The
-   chart never compares apples to oranges.
+   This is the prototype's depth area. Six checks: pose (yaw/pitch/roll ±15°
+   frontal, ±5° profile), exposure (over/under, measured on the face crop),
+   sharpness (resolution-normalized Laplacian variance + a native face-width
+   floor), lighting uniformity (left/right face-brightness asymmetry),
+   skin visibility (per-ROI skin-pixel ratio — catches masks / sunglasses /
+   hair occlusion), and color (ArUco gray-card white balance, soft warning).
+   A failed photo is rejected with a 繁中 reason ("頭部右偏 18°，請正對鏡頭").
+   The chart never compares apples to oranges.
 
 3. **The LLM is the final layer, not the engine.** Either Anthropic Claude
    or Google Gemini drafts the 繁中 explanation + editable treatment plan
@@ -64,13 +67,18 @@ Three decisions separate this prototype from "yet another Vision-LLM wrapper":
 
 | Skin attribute | Method | Reproducible? |
 |---|---|---|
-| Pigmentation | Black-hat morphology pixel ratio | Yes |
+| Pigmentation | Black-hat morphology pixel ratio (Gaussian-denoised) | Yes |
 | Erythema (redness) | LAB a\* channel mean | Yes |
 | Wrinkles | Sobel-magnitude edge density | Yes |
 | Pores | LoG blob detection | Yes |
 | Tone uniformity | L\*-channel stddev (inverted) | Yes |
 
-The LLM never produces the numbers on the chart.
+All five run on a **scale-normalized face** (anatomical face width rescaled to
+a fixed 512 px before ROI extraction) and on an **effective mask** that
+excludes specular glare and deep shadow — so the numbers track skin, not the
+camera distance or the ceiling lights. Every visit stores the
+`scoring_version` that produced its numbers. The LLM never produces the
+numbers on the chart.
 
 ## Architecture
 
@@ -79,7 +87,8 @@ Streamlit UI (繁體中文)
        │
        ▼
 FacePipeline ── ConsistencyGate ── ScoringEngine ── (Mock | Anthropic | Gemini) Explainer
-(MediaPipe)     (pose/exp/sharp/color)  (5 CV metrics)        │
+(MediaPipe      (pose/exposure/sharpness/   (5 CV metrics,        │
+ + 512px scale   lighting/skin/color)        glare-masked)        │
        │                                                       ▼
        └──────────────── SQLite (SQLModel) ◀──── editable TreatmentNote
 ```
@@ -161,7 +170,7 @@ facetrack-crm/
 │   ├── reproducibility_evidence.py # σ̄ comparison chart (TDD §3, BUILD_NOTES §4 source)
 │   ├── build_docs_pdf.sh           # Render PRD / TDD / BUILD_NOTES PDFs
 │   └── generate_demo_photos.py     # Nano Banana Pro longitudinal photo gen
-├── tests/                          # 71 tests across 7 files — run with: uv run pytest -v
+├── tests/                          # 92 tests across 9 files — run with: uv run pytest -v
 ├── pyproject.toml                  # uv-managed deps + ruff/pytest config
 ├── requirements.txt                # Mirrors pyproject for Streamlit Cloud
 └── runtime.txt                     # python-3.11 for Streamlit Cloud
@@ -176,7 +185,8 @@ Five things should be reachable in the live app:
 2. **`📸 新增就診` → live capture tab** — face-mesh + HUD draws live;
    auto-capture fires only when pose / face-fill / stability all pass.
 3. **`📸 新增就診` → upload fallback** — drag `data/test_images/test_face_1.jpg`
-   (underexposed) → gate rejects with a 繁中 reason; drag `test_face_2.jpg`
+   (blown-out, side-lit) → gate rejects with two concrete 繁中 reasons
+   (臉部曝光過度 + 光照不均); drag `test_face_2.jpg`
    → passes → 5 scores + 4 ROI heatmaps + LLM treatment draft.
 4. **`📋 就診歷史`** — toggle "🔬 顯示 ROI 訊號疊圖" and "🧪 顯示各 ROI 局部影像"
    to compare across visits.
