@@ -12,6 +12,7 @@
 | [`docs/TDD.pdf`](./docs/TDD.pdf) | Imaging pipeline · reliability · workflow · consistency controls |
 | [`docs/BUILD_NOTES.pdf`](./docs/BUILD_NOTES.pdf) | Authorship, debug stories, latency + reproducibility tables |
 | [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) | 6 failure modes × Phase-2 mitigations |
+| [`docs/VALIDATION.md`](./docs/VALIDATION.md) | Ground-truth validation evidence for the gate + scoring engine (FFHQ-Wrinkle, ACNE04, SCIN) |
 
 Reproduce the headline numbers from the BUILD_NOTES tables yourself:
 
@@ -164,13 +165,14 @@ facetrack-crm/
 │   ├── TDD.md                      # Technical design (1-2 pages)
 │   ├── BUILD_NOTES.md              # Authorship / debugging note
 │   ├── LIMITATIONS.md              # Honest failure-mode catalogue + Phase-2 plan
+│   ├── VALIDATION.md               # Ground-truth validation evidence (FFHQ/ACNE04/SCIN)
 │   └── figures/reproducibility.png # Determinism evidence (embedded in TDD §3)
 ├── scripts/
 │   ├── benchmark.py                # End-to-end latency (BUILD_NOTES §4 source)
 │   ├── reproducibility_evidence.py # σ̄ comparison chart (TDD §3, BUILD_NOTES §4 source)
 │   ├── build_docs_pdf.sh           # Render PRD / TDD / BUILD_NOTES PDFs
 │   └── generate_demo_photos.py     # Nano Banana Pro longitudinal photo gen
-├── tests/                          # 92 tests across 9 files — run with: uv run pytest -v
+├── tests/                          # 97 tests/10 files (92 fast + 5 opt-in) — uv run pytest -v
 ├── pyproject.toml                  # uv-managed deps + ruff/pytest config
 ├── requirements.txt                # Mirrors pyproject for Streamlit Cloud
 └── runtime.txt                     # python-3.11 for Streamlit Cloud
@@ -200,7 +202,8 @@ just described" rule.
 ## Tests
 
 ```bash
-uv run pytest -v
+uv run pytest -v                # 92 fast tests (default; opt-out marker excludes validation)
+uv run pytest -m validation     # +5 opt-in ground-truth benchmarks — needs data/validation/ (~70s)
 uv run ruff check .
 ```
 

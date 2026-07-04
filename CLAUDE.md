@@ -4,18 +4,22 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-07-04 (Session 4 — Gate v2 + Scoring v2 hardening pass)
+> **Last updated**: 2026-07-05 (Session 6 — FFHQ retune + validation benchmark layer)
 > **Deadline**: submission sent 2026-05-19; current work targets the follow-up
 > panel calls (product-lead PRD call + CTO technical call)
 >
-> ## ⏭️ Resuming work? Jump to [§12 — Session 4 changes](#12-session-4--gate-v2--scoring-v2) then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
+> ## ⏭️ Resuming work? Jump to [§12 — Session 4 changes](#12-session-4--gate-v2--scoring-v2), `docs/VALIDATION.md` for ground-truth evidence, then [§6 — Pickup checklist](#6-pickup-checklist-for-the-next-session)
 >
 > **Session 4 hardened both core features: the gate went 4 → 6 checks**
 > **(face-crop exposure, resolution-normalized sharpness + native-width floor,**
 > **lighting-uniformity, skin-visibility/occlusion, WB gain clamp) and scoring**
 > **gained 512px scale normalization, specular/shadow effective masks, a**
 > **denoised pigmentation metric, recalibrated wrinkle/pore ranges, and a**
-> **persisted SCORING_VERSION column. 71 → 92 tests. See §12.**
+> **persisted SCORING_VERSION column (71 → 92 tests; see §12). Session 5/6**
+> **then graded both features against public ground truth (FFHQ-Wrinkle,**
+> **ACNE04, SCIN), retuned `WRINKLE_RAW_RANGE` to (0.20, 0.62), and added 5**
+> **opt-in real-data benchmarks — 97 tests across 10 files**
+> **(`uv run pytest -m validation`; see `docs/VALIDATION.md`).**
 
 ---
 
@@ -49,6 +53,7 @@ It is the **AI Fund Engineer in Residence Build Challenge** submission.
 | `scripts/reproducibility_evidence.py` | Regenerates the reproducibility chart | Agents + Eric |
 | `scripts/benchmark.py` | Re-measures end-to-end pipeline latency | Agents + Eric |
 | `docs/LIMITATIONS.md` | 6 failure modes + concrete Phase-2 mitigations | AI Fund panel |
+| `docs/VALIDATION.md` | Ground-truth validation evidence for the gate + scoring engine (FFHQ-Wrinkle, ACNE04, SCIN) | AI Fund panel + agents |
 | `docs/PRD.pdf` / `docs/TDD.pdf` | PDF renders of the panel docs (regenerate via `scripts/build_docs_pdf.sh`) | AI Fund panel |
 
 ## 4. Architecture in one diagram
@@ -95,7 +100,9 @@ Append, do not delete — the history is itself useful context for future agents
 | 2026-07-04 | BUILD_NOTES/TDD reproducibility table showed σ = 0.000 for wrinkle+pore, presented as robustness; actually the scores were clamp-saturated at 10.0 on the reference face (v1 ranges too narrow at the real capture scale). | Ranges re-fitted at the 512px scale; new table (σ̄ 0.197 vs 0.747) published with an explicit honesty note in BUILD_NOTES §4 / TDD §3. |
 | 2026-07-04 | README smoke test said `test_face_1.jpg` is rejected as "underexposed"; with face-crop exposure it is actually rejected for 曝光過度 (blown-out left side, 18.8% clipped) + 光照不均 (asym 0.52). | README wording updated; the deploy smoke-test expectation in §6 below updated to match. |
 
-Currently open: **none** (as of 2026-07-04). If you find new drift, add a row.
+| 2026-07-05 | This branch (FFHQ retune + validation benchmark layer) left CLAUDE.md stale: §12 still described `WRINKLE_RAW_RANGE` as `(0.25, 0.75)` after it was retuned to `(0.20, 0.62)` against FFHQ ground truth; the 2026-07-04 reproducibility log row's σ̄ 0.197 vs 0.747 figures were the pre-retune measurement, since superseded; §6 still said "92 tests pass across 9 files" (actual: 97 across 10 files — 92 fast + 5 opt-in real-data benchmarks). | All synced: §12 now notes the retune and points to `docs/VALIDATION.md` for the current range and reproducibility numbers; every test-count mention updated to 97/10; `docs/VALIDATION.md` added to the §3 doc map. |
+
+Currently open: **none** (as of 2026-07-05). If you find new drift, add a row.
 
 ## 6. Pickup checklist for the next session
 
@@ -112,7 +119,7 @@ Status at session-1 end (2026-05-17):
 | Bonus: failure-mode catalogue | ✅ `docs/LIMITATIONS.md` (6 cases × Phase-2 fixes) |
 | Bonus: panel PDFs | ✅ `docs/PRD.pdf` · `docs/TDD.pdf` · `docs/BUILD_NOTES.pdf` (rebuild via `scripts/build_docs_pdf.sh`) |
 
-**Test coverage**: 92 tests pass across 9 files; fresh-clone-from-GitHub smoke-tested (pre-Session-4).
+**Test coverage**: 97 tests across 10 files (92 fast + 5 opt-in real-data benchmarks — `uv run pytest -m validation`); fresh-clone-from-GitHub smoke-tested (pre-Session-4).
 
 ### Remaining work (all manual — agent cannot do these)
 
@@ -396,7 +403,9 @@ points (was ≤ 5.5).
 - **`scoring.py`** — `_effective_mask()` (L* band [20, 235], 1px erode,
   30% keep-ratio fallback) applied inside every raw metric; pigmentation
   gets the Gaussian denoise; `WRINKLE_RAW_RANGE` (0.25, 0.75) and
-  `PORE_RAW_RANGE` (0.03, 0.22) re-fitted at 512px scale.
+  `PORE_RAW_RANGE` (0.03, 0.22) re-fitted at 512px scale. (`WRINKLE_RAW_RANGE`
+  was subsequently retuned to `(0.20, 0.62)` in Session 6 against the
+  FFHQ-Wrinkle ground-truth p5–p95 — see `docs/VALIDATION.md`.)
 - **`db.py`** — `REGION_LABELS_ZH` moved here (single source; gate +
   app.py both consume); `Visit.scoring_version` column +
   `_migrate_add_visit_scoring_version_column()` (legacy rows → 1).

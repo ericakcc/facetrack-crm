@@ -2,7 +2,7 @@
 
 **Author**: Eric Tsou
 **For**: AI Fund Engineer in Residence — Build Challenge (companion to PRD / TDD / BUILD_NOTES)
-**Date**: 2026-05-17 · **Updated**: 2026-07-04 (§2 occlusion check shipped in Gate v2; §4 gained a v2 note)
+**Date**: 2026-05-17 · **Updated**: 2026-07-05 (§2 occlusion check shipped in Gate v2; §4 gained a v2 note, then a Session 6 SCIN fairness-audit result)
 
 This document exists because every "AI for medical imaging" product I've
 seen at this maturity level silently fails on edge cases and ships
@@ -116,6 +116,11 @@ it inherits this same bias and must be re-validated on V–VI faces
 skin could be falsely flagged as "occluded". The scoring-side exclusion
 band (deep-shadow L\* < 20) is conservative enough that healthy V–VI
 skin (typical L\* ≫ 60) is unaffected.
+
+**Session 6 update**: measured on a Fitzpatrick-stratified SCIN sample,
+the gate's YCrCb skin check pass-rate gap was **−1.7 pp** (darker skin
+passing slightly *more* often, not less) — see `docs/VALIDATION.md` §3;
+this gap is now enforced to stay ≤ 5 pp by `uv run pytest -m validation`.
 
 ---
 

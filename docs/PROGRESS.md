@@ -7,20 +7,23 @@
 
 ### ✅ 已完成
 - **Session 1–3**(2026-05-17 → 05-19,已提交至 AI Fund):可跑的 Streamlit 原型、Photo-Consistency Gate、五項確定性 CV 膚質指標、LLM 解釋層(Mock/Anthropic/Gemini)、縱向追蹤、實況人臉拍攝元件、就診歷史 ROI 疊圖。GitHub 公開 repo、Streamlit Cloud 部署、Loom demo、PRD/TDD/BUILD_NOTES/LIMITATIONS 四份 panel 文件 + PDF。
-- **Session 4**(2026-07-04)兩大核心功能全面優化:
+- **Session 4**(2026-07-04,已 commit)兩大核心功能全面優化:
   - **Gate v2**:4 → 6 項檢查(臉部曝光、解析度正規化清晰度 + 400px 臉寬下限、光照均勻、皮膚可見度/遮擋、白平衡增益限幅)。
   - **Scoring v2**:512px 臉寬尺度正規化(修掉「分數隨拍攝距離變動」的致命傷)、反光/深影有效遮罩、色素指標去噪、皺紋/毛孔範圍重校、`SCORING_VERSION=2` 逐 visit 存檔 + 零停機 migration。
   - 92 測試全過(原 71)、`ruff` 乾淨;6 份文件 + 3 份 PDF 同步更新;可重現性圖 + 延遲基準重跑。
-- **Session 5**(2026-07-04)真實資料驗證骨架——把兩大核心功能拿去對 ground-truth 打分:
+- **Session 5**(2026-07-04,已 commit)真實資料驗證骨架——把兩大核心功能拿去對 ground-truth 打分:
   - 下載 3 個公開資料集(`data/validation/`,真人像素 gitignore):**FFHQ-Wrinkle**(1000 臉 + 1000 人工皺紋遮罩)、**ACNE04**(394 張醫師分級)、**SCIN**(360 張 Fitzpatrick 分層)。
   - 寫 3 支驗證腳本(`scripts/validation/`,import production 函式、ruff 乾淨)。
   - **實測結論**:皺紋 ROI 排序 ρ=0.42(整臉僅 0.145,實測驗證 ROI 設計);泛紅隨痘痘嚴重度單調上升(建構效度);gate 膚色檢查無深膚偏誤(LIMITATIONS §4 顧慮未成立)。
+- **Session 6**(2026-07-05,已 commit)把 Session 5 的發現套用回產品 + 蓋上迴歸測試層:
+  - **`WRINKLE_RAW_RANGE` 重校已套用**:`(0.25, 0.75)` → **`(0.20, 0.62)`**(FFHQ 真人臉 p5–p95 實測值),`SCORING_VERSION` 維持 **2**(範圍調整不算公式版本變更)。
+  - **驗證骨架轉正為迴歸網**:新增 `tests/test_validation_benchmarks.py`(5 個 opt-in 測試,`pytest -m validation`,~70s,需本機資料);pyproject `addopts` 預設 `-m 'not validation'` 排除,fixtures 在資料缺失時一律 **skip**(不 fail、不 error)。
+  - **文件全面重新對齊**:新增 `docs/VALIDATION.md`(3 項 ground-truth 發現的彙總證據,CTO/panel 用);可重現性數字更新為 **σ̄ 0.173 vs 基線 0.686**(~4×),其中皺紋 σ=0.091 部分是 p95 天花板夾制而非純粹穩健性——誠實揭露寫在 `BUILD_NOTES.md` §4;CLAUDE.md / README / TDD 測試數字同步為 **97 tests / 10 files(92 fast + 5 opt-in)**。
 
 ### ⚠️ 目前資料 / 狀態
-- Session 4 + 5 全部改動在 working tree,**尚未 commit**(git HEAD 仍為 `2f6beae`)。S5 新增:`.gitignore` 區塊、`data/validation/**`、`scripts/validation/**`。
-- Streamlit Cloud 線上版仍是 v1,需**重新部署**才會吃到 v2。
-- 現行數字(取代所有舊值):**92 tests / 9 files**、延遲 **21.6ms p50**、可重現性 **σ̄ 0.197 vs 基線 0.747(~4×)**。臨床準確度**首次有外部 ground-truth 佐證**(見上;仍非院內儀器對照)。
-- **待決策**:FFHQ 顯示 `wrinkle_raw` 真人臉落 [0.197, 0.619],但 `WRINKLE_RAW_RANGE=(0.25, 0.75)` 上限從未觸及 → 建議重校至 ≈(0.20, 0.62),但會動到 scoring/測試/可重現性圖,**尚未套用**,留給人決定。
+- Session 4 + 5 + 6 皆已 commit(見 `git log`);working tree 乾淨。
+- Streamlit Cloud 線上版仍是 v1,需**重新部署**才會吃到 v2 + 重校後的 wrinkle range。
+- 現行數字(取代所有舊值):**97 tests / 10 files**(92 fast + 5 opt-in 真實資料 benchmark,`uv run pytest -m validation`)、延遲 **21.6ms p50**、可重現性 **σ̄ 0.173 vs 基線 0.686(~4×)**。臨床準確度有外部 ground-truth 佐證(見 `docs/VALIDATION.md`;仍非院內儀器對照)。
 
 ### ❌ 試過但放棄的路(及原因)
 - **驗證用整臉 `wrinkle_raw`**:ρ 僅 0.06–0.15,被眼/眉/髮際邊緣污染。改限定 production 皮膚 ROI 後 ρ 跳到 0.42。
@@ -30,13 +33,11 @@
 - **找 melasma/MASI、rosacea CEA 分級的公開影像資料集**:確認不存在(相關研究全為院內 VISIA 私有資料)。下次別再重找。
 
 ### ⏭️ 待辦(排序)
-1. Review diff → commit(建議拆:S4 code/tests/docs + S5 validation harness 分開)。
-2. 重新部署 Streamlit Cloud。
-3. **決定是否套用 `WRINKLE_RAW_RANGE` 重校**至 (0.20, 0.62);若套用,連帶重跑 test_scoring_robustness + 可重現性圖 + BUILD_NOTES。
-4. 考慮新增 `docs/VALIDATION.md`(或 BUILD_NOTES §7)引用 3 項驗證發現——CTO/panel 的強力證據。
-5. 實況拍攝 JS HUD 補上兩項新檢查的即時提示。
-6. 縱向圖表加 scoring_version 邊界註記(CTO call 前)。
-7. 寫信向 Kesty(drkesty@stpeteskinandlaser.com)申請 SkinAnalysis 資料集(五指標最佳對應,須申請)。
+1. 重新部署 Streamlit Cloud(v2 + wrinkle range 重校)。
+2. 實況拍攝 JS HUD 補上光照均勻 + 皮膚可見度兩項新檢查的即時提示。
+3. 縱向圖表加 scoring_version 邊界註記(CTO call 前)。
+4. 寫信向 Kesty(drkesty@stpeteskinandlaser.com)申請 SkinAnalysis 資料集(五指標最佳對應,須申請)。
+5. 考慮為可重現性評測挑一張分數落中段(非高紋理天花板)的參考臉,讓皺紋 σ 不再被 p95 夾制稀釋。
 
 ---
 
