@@ -30,6 +30,9 @@ uv run python scripts/validation/validate_severity_acne04.py
 uv run python scripts/validation/validate_skintone_bias_scin.py
 ```
 
+The same checks run as opt-in regression tests — `uv run pytest -m
+validation` — with thresholds documented in `docs/VALIDATION.md`.
+
 ---
 
 ## FFHQ-Wrinkle — `ffhq_wrinkle/`
