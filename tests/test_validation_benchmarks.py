@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts" / "validation"))
 
 import validate_severity_acne04  # noqa: E402
+import validate_skintone_bias_scin  # noqa: E402
 import validate_wrinkle_ffhq  # noqa: E402
 
 from facetrack.scoring import WRINKLE_RAW_RANGE  # noqa: E402
@@ -94,3 +95,22 @@ def test_texture_metrics_stay_flat_across_acne_severity(acne_result: dict[str, A
             f"{metric} correlates with acne severity (rho {rho:+.3f}) — "
             "texture metric is picking up inflammation, not texture"
         )
+
+
+@pytest.fixture(scope="module")
+def scin_result() -> dict[str, Any]:
+    """Full SCIN fairness-audit summary (skips when data is absent)."""
+    if not (DATA / "scin" / "scin_sample_manifest.csv").exists():
+        pytest.skip("SCIN sample not downloaded — see data/validation/README.md")
+    return validate_skintone_bias_scin.run_validation()
+
+
+def test_gate_skin_check_has_no_large_skintone_gap(scin_result: dict[str, Any]) -> None:
+    """Fairness: the YCrCb skin check must pass dark and light skin alike."""
+    assert scin_result["n"] >= 300, "partial SCIN download — refetch before trusting stats"
+    gap = scin_result["pass_gap"]
+    assert gap is not None, "missing FST1-2 or FST5-6 samples — cannot audit bias"
+    assert abs(gap) <= 0.05, (
+        f"gate pass-rate gap FST1-2 vs FST5-6 = {gap:+.1%} exceeds 5pp — "
+        "skin-tone bias regression (Session-5 baseline: -1.7pp)"
+    )
