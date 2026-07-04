@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -67,7 +68,18 @@ def rank_biserial(a: np.ndarray, b: np.ndarray) -> float:
     return gt - lt
 
 
-def main() -> None:
+def run_validation() -> dict[str, Any]:
+    """Run the ACNE04 known-groups validation and return summary statistics.
+
+    Returns:
+        Dict with keys: n, n_by_grade ({grade: count}), metrics
+        ({name: {"means": [grade0..grade3], "rho": float,
+        "rank_biserial": float, "monotone": bool}}), rows (per-image
+        tuples of (grade, filename, {metric: value})).
+
+    Raises:
+        FileNotFoundError: No ACNE04 images are downloaded.
+    """
     rows: list[tuple[int, str, dict[str, float]]] = []
     for g in GRADES:
         folder = DATA / f"acne{g}_1024"
@@ -83,35 +95,54 @@ def main() -> None:
             vals = {name: float(fn(bgr)) for name, fn in METRICS.items()}
             rows.append((g, fp.name, vals))
     if not rows:
-        sys.exit(f"No ACNE04 images under {DATA}. See data/validation/README.md.")
+        raise FileNotFoundError(f"No ACNE04 images under {DATA}. See data/validation/README.md.")
+
+    grades = np.array([r[0] for r in rows])
+    metrics_summary: dict[str, dict[str, Any]] = {}
+    for m in METRICS:
+        series = np.array([r[2][m] for r in rows])
+        means = [float(series[grades == g].mean()) for g in GRADES]
+        metrics_summary[m] = {
+            "means": means,
+            "rho": spearman(grades.astype(float), series),
+            "rank_biserial": rank_biserial(series[grades == 0], series[grades == 3]),
+            "monotone": means == sorted(means),
+        }
+
+    return {
+        "n": len(rows),
+        "n_by_grade": {g: int((grades == g).sum()) for g in GRADES},
+        "metrics": metrics_summary,
+        "rows": rows,
+    }
+
+
+def main() -> None:
+    """CLI entry point: run the validation, write CSV/plot artifacts, print report."""
+    try:
+        res = run_validation()
+    except FileNotFoundError as e:
+        sys.exit(str(e))
 
     RESULTS.mkdir(exist_ok=True)
-    grades = np.array([r[0] for r in rows])
-    n_by_grade = {g: int((grades == g).sum()) for g in GRADES}
-    print(f"Loaded {len(rows)} graded faces  {n_by_grade}\n")
+    print(f"Loaded {res['n']} graded faces  {res['n_by_grade']}\n")
 
     with (RESULTS / "acne_per_image.csv").open("w") as f:
         f.write("grade,file," + ",".join(METRICS) + "\n")
-        for g, name, vals in rows:
+        for g, name, vals in res["rows"]:
             f.write(f"{g},{name}," + ",".join(f"{vals[m]:.6f}" for m in METRICS) + "\n")
 
-    trend: dict[str, list[float]] = {}
     print(
         f"{'metric':14s}  "
         + "  ".join(f"grade{g}" for g in GRADES)
         + "   Spearman   rank-biserial(0 vs 3)"
     )
-    for m in METRICS:
-        series = np.array([r[2][m] for r in rows])
-        means = [series[grades == g].mean() for g in GRADES]
-        trend[m] = means
-        rho = spearman(grades.astype(float), series)
-        rb = rank_biserial(series[grades == 0], series[grades == 3])
-        arrow = "monotone↑" if means == sorted(means) else "NON-MONOTONE"
+    for m, s in res["metrics"].items():
+        arrow = "monotone↑" if s["monotone"] else "NON-MONOTONE"
         print(
             f"{m:14s}  "
-            + "  ".join(f"{v:6.3f}" for v in means)
-            + f"   rho={rho:+.3f}   rb={rb:+.3f}   {arrow}"
+            + "  ".join(f"{v:6.3f}" for v in s["means"])
+            + f"   rho={s['rho']:+.3f}   rb={s['rank_biserial']:+.3f}   {arrow}"
         )
 
     try:
@@ -122,7 +153,7 @@ def main() -> None:
 
         fig, axes = plt.subplots(1, len(METRICS), figsize=(4 * len(METRICS), 4), dpi=120)
         for ax, m in zip(axes, METRICS, strict=True):
-            ax.plot(GRADES, trend[m], "o-", color="#c05621")
+            ax.plot(GRADES, res["metrics"][m]["means"], "o-", color="#c05621")
             ax.set_title(m)
             ax.set_xlabel("Hayashi severity grade")
             ax.set_xticks(GRADES)

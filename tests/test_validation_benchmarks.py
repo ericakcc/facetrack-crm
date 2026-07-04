@@ -23,6 +23,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts" / "validation"))
 
+import validate_severity_acne04  # noqa: E402
 import validate_wrinkle_ffhq  # noqa: E402
 
 from facetrack.scoring import WRINKLE_RAW_RANGE  # noqa: E402
@@ -65,3 +66,31 @@ def test_wrinkle_range_matches_real_face_distribution(ffhq_result: dict[str, Any
     assert abs(hi - ffhq_result["raw_p95"]) <= RANGE_ENDPOINT_TOL, (
         f"range high {hi} vs measured p95 {ffhq_result['raw_p95']:.3f}"
     )
+
+
+@pytest.fixture(scope="module")
+def acne_result() -> dict[str, Any]:
+    """Full ACNE04 known-groups validation summary (skips when data is absent)."""
+    if not (DATA / "acne04" / "acne0_1024").exists():
+        pytest.skip("ACNE04 not downloaded — see data/validation/README.md")
+    return validate_severity_acne04.run_validation()
+
+
+def test_erythema_rises_with_acne_severity(acne_result: dict[str, Any]) -> None:
+    """Construct validity: redness must climb with dermatologist severity grades."""
+    assert acne_result["n"] >= 300, "partial ACNE04 download — refetch before trusting stats"
+    rho = acne_result["metrics"]["erythema_raw"]["rho"]
+    assert rho > 0.15, (
+        f"erythema-vs-severity Spearman rho {rho:.3f} <= 0.15 — "
+        "construct validity lost (Session-5 baseline: 0.23)"
+    )
+
+
+def test_texture_metrics_stay_flat_across_acne_severity(acne_result: dict[str, Any]) -> None:
+    """Discriminant validity: texture metrics must NOT fire on inflammation."""
+    for metric in ("wrinkle_raw", "pore_raw"):
+        rho = acne_result["metrics"][metric]["rho"]
+        assert abs(rho) < 0.10, (
+            f"{metric} correlates with acne severity (rho {rho:+.3f}) — "
+            "texture metric is picking up inflammation, not texture"
+        )
