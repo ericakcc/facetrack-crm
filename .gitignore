@@ -26,6 +26,30 @@ data/photos/*.jpg
 data/photos/*.png
 data/photos/*.jpeg
 !data/photos/.gitkeep
+# Validation datasets — real-person images stay LOCAL per §7 ("No real-person images
+# in the repo"). We track the reproducible bits (scripts, manifests, license notes)
+# so anyone can re-fetch, but never the pixels/masks/large metadata JSON.
+data/validation/**/images/
+data/validation/**/*.webp
+data/validation/**/*.png
+data/validation/**/*.jpg
+data/validation/**/*.jpeg
+data/validation/ffhq_wrinkle/manual_wrinkle_masks/
+data/validation/ffhq_wrinkle/*.zip
+data/validation/ffhq_wrinkle/ffhq-dataset-v1.json
+data/validation/ffhq_wrinkle/head.bin
+data/validation/acne04/.cache/
+# Keep the reproducible + aggregate bits (no real-person pixels in any of these):
+# scripts, ID/URL manifests, README, and the aggregate result CSVs/plots that
+# the validation scripts emit under results/ — these are panel evidence.
+!data/validation/**/*.md
+!data/validation/**/*_manifest.csv
+!data/validation/**/*_ids_urls.csv
+!data/validation/**/*.py
+!data/validation/**/results/
+!data/validation/**/results/*.csv
+!data/validation/**/results/*.png
+
 # Real-person test photos — local-only per CLAUDE.md §7 ("No real-person images in the repo").
 # CC0 test_face_{1,2,3}.jpg are exempt and stay tracked.
 data/test_images/self_*.jpg
@@ -47,3 +71,8 @@ coverage.xml
 
 # Build artefacts for docs PDF pipeline (pandoc HTML + CSS, regenerated each run)
 .docs-pdf-build/
+
+# Pitch/demo assets are rendered from real patient photos (repo rule:
+# no real-person pixels in git). Files stay local; regenerate via
+# scripts/render_pitch_assets.py + scripts/capture_*.py.
+docs/assets/
