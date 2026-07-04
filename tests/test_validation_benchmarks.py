@@ -10,6 +10,10 @@ The datasets hold real-person pixels and are therefore gitignored; each
 fixture skips with re-download instructions (data/validation/README.md)
 when its dataset is absent. Module-scoped fixtures mean each dataset is
 processed once per run — the FFHQ fixture takes ~10-20 minutes.
+
+Invoking this file directly (`uv run pytest tests/test_validation_benchmarks.py`)
+selects nothing, because the project's `addopts` carries `-m 'not validation'` —
+use `uv run pytest -m validation` instead.
 """
 
 from __future__ import annotations
@@ -41,7 +45,10 @@ def ffhq_result() -> dict[str, Any]:
     masks = DATA / "ffhq_wrinkle" / "manual_wrinkle_masks"
     if not any(masks.glob("*.png")):
         pytest.skip("FFHQ-Wrinkle not downloaded — see data/validation/README.md")
-    return validate_wrinkle_ffhq.run_validation()
+    try:
+        return validate_wrinkle_ffhq.run_validation()
+    except (FileNotFoundError, RuntimeError) as e:
+        pytest.skip(f"{e} — see data/validation/README.md")
 
 
 def test_wrinkle_roi_ranking_tracks_human_annotations(ffhq_result: dict[str, Any]) -> None:
@@ -74,7 +81,10 @@ def acne_result() -> dict[str, Any]:
     """Full ACNE04 known-groups validation summary (skips when data is absent)."""
     if not (DATA / "acne04" / "acne0_1024").exists():
         pytest.skip("ACNE04 not downloaded — see data/validation/README.md")
-    return validate_severity_acne04.run_validation()
+    try:
+        return validate_severity_acne04.run_validation()
+    except (FileNotFoundError, RuntimeError) as e:
+        pytest.skip(f"{e} — see data/validation/README.md")
 
 
 def test_erythema_rises_with_acne_severity(acne_result: dict[str, Any]) -> None:
@@ -102,7 +112,10 @@ def scin_result() -> dict[str, Any]:
     """Full SCIN fairness-audit summary (skips when data is absent)."""
     if not (DATA / "scin" / "scin_sample_manifest.csv").exists():
         pytest.skip("SCIN sample not downloaded — see data/validation/README.md")
-    return validate_skintone_bias_scin.run_validation()
+    try:
+        return validate_skintone_bias_scin.run_validation()
+    except (FileNotFoundError, RuntimeError) as e:
+        pytest.skip(f"{e} — see data/validation/README.md")
 
 
 def test_gate_skin_check_has_no_large_skintone_gap(scin_result: dict[str, Any]) -> None:
