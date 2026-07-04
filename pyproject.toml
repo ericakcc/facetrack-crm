@@ -45,4 +45,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not validation'"
+markers = [
+    "validation: real-data ground-truth benchmarks; needs data/validation/ downloads (run: uv run pytest -m validation)",
+]

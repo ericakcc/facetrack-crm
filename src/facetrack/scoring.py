@@ -69,10 +69,14 @@ EXCLUSION_MIN_KEEP_RATIO = 0.3
 # Wrinkle/pore shifted upward vs v1 because texture-density ratios grow at
 # the smaller sampling scale (fixed 3x3/5x5 kernels cover relatively larger
 # anatomy); pigmentation/erythema/uniformity distributions were unchanged.
+# Wrinkle was then re-fitted against FFHQ-Wrinkle ground truth (n=1000,
+# ROI-restricted, CLAHE-matched): real-face p5-p95 = [0.197, 0.619], so the
+# reference-face (0.25, 0.75) ceiling was never reached and the top of the
+# 0-10 scale was dead range. Guarded by tests/test_validation_benchmarks.py.
 # Re-calibrate when a clinic provides its own training distribution.
 PIGMENTATION_RAW_RANGE = (0.02, 0.30)
 ERYTHEMA_RAW_RANGE = (134.0, 148.0)
-WRINKLE_RAW_RANGE = (0.25, 0.75)
+WRINKLE_RAW_RANGE = (0.20, 0.62)
 PORE_RAW_RANGE = (0.03, 0.22)
 UNIFORMITY_RAW_RANGE = (12.0, 50.0)
 
