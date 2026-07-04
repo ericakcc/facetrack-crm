@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -125,29 +127,38 @@ def roi_union(pipeline: FacePipeline, landmarks: np.ndarray, shape) -> np.ndarra
     return union if got else None
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--limit", type=int, default=None, help="cap number of images (default all)")
-    ap.add_argument(
-        "--thresholds",
-        type=str,
-        default="15,20,25,30,35,40,50,60",
-        help="comma-separated Sobel cutoffs to sweep",
-    )
-    args = ap.parse_args()
-    thresholds = [float(t) for t in args.thresholds.split(",")]
+DEFAULT_THRESHOLDS: tuple[float, ...] = (15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 50.0, 60.0)
 
+
+def run_validation(
+    limit: int | None = None,
+    thresholds: Sequence[float] = DEFAULT_THRESHOLDS,
+) -> dict[str, Any]:
+    """Run the FFHQ-Wrinkle validation and return summary statistics.
+
+    Args:
+        limit: Cap the number of processed faces (None = all available).
+        thresholds: Sobel cutoffs to sweep for the localization report.
+
+    Returns:
+        Dict with keys: n, n_detect_fail, roi_spearman, roi_pearson,
+        whole_spearman, whole_pearson, raw_p5, raw_p95, rows (per-image
+        tuples of (ffhq_id, wrinkle_raw_roi, gt_density_roi,
+        wrinkle_raw_whole, gt_density_whole)), sweep (per-cutoff tuples of
+        (cutoff, precision, recall, f1)), best_cutoff, best_f1.
+
+    Raises:
+        FileNotFoundError: No masks are downloaded.
+        RuntimeError: No face produced usable landmarks/ROIs.
+    """
     pipeline = FacePipeline()
     mask_ids = sorted(p.stem for p in MASKS.glob("*.png"))
     if not mask_ids:
-        sys.exit(f"No masks under {MASKS}. See data/validation/README.md.")
+        raise FileNotFoundError(f"No masks under {MASKS}. See data/validation/README.md.")
 
-    RESULTS.mkdir(exist_ok=True)
     kernel = np.ones((MASK_DILATE_PX * 2 + 1,) * 2, np.uint8)
-
     roi_metric, roi_gt, whole_metric, whole_gt = [], [], [], []
-    rows = []
-    # localization accumulators: tp/fp/fn per threshold, restricted to skin ROIs
+    rows: list[tuple[str, float, float, float, float]] = []
     tp = {t: 0 for t in thresholds}
     fp = {t: 0 for t in thresholds}
     fn = {t: 0 for t in thresholds}
@@ -203,61 +214,98 @@ def main() -> None:
             fn[t] += int((~fire & gt_line & union).sum())
 
         n_done += 1
-        if args.limit and n_done >= args.limit:
+        if limit and n_done >= limit:
             break
         if n_done % 200 == 0:
             print(f"  ...{n_done} faces processed", flush=True)
 
     if not rows:
-        sys.exit("No usable faces (detection failed on all). Check the download.")
+        raise RuntimeError("No usable faces (detection failed on all). Check the download.")
 
-    roi_metric = np.array(roi_metric)
-    roi_gt = np.array(roi_gt)
-    whole_metric = np.array(whole_metric)
-    whole_gt = np.array(whole_gt)
+    roi_metric_a = np.array(roi_metric)
+    roi_gt_a = np.array(roi_gt)
+    whole_metric_a = np.array(whole_metric)
+    whole_gt_a = np.array(whole_gt)
+    lo, hi = np.percentile(roi_metric_a, [5, 95])
 
+    sweep: list[tuple[float, float, float, float]] = []
+    best: tuple[float, float] = (float(thresholds[0]), -1.0)
+    for t in thresholds:
+        prec = tp[t] / (tp[t] + fp[t]) if tp[t] + fp[t] else 0.0
+        rec = tp[t] / (tp[t] + fn[t]) if tp[t] + fn[t] else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+        sweep.append((t, prec, rec, f1))
+        if f1 > best[1]:
+            best = (t, f1)
+
+    return {
+        "n": n_done,
+        "n_detect_fail": n_detect_fail,
+        "roi_spearman": spearman(roi_metric_a, roi_gt_a),
+        "roi_pearson": pearson(roi_metric_a, roi_gt_a),
+        "whole_spearman": spearman(whole_metric_a, whole_gt_a),
+        "whole_pearson": pearson(whole_metric_a, whole_gt_a),
+        "raw_p5": float(lo),
+        "raw_p95": float(hi),
+        "rows": rows,
+        "sweep": sweep,
+        "best_cutoff": best[0],
+        "best_f1": best[1],
+    }
+
+
+def main() -> None:
+    """CLI entry point: run the validation, write CSV/plot artifacts, print report."""
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--limit", type=int, default=None, help="cap number of images (default all)")
+    ap.add_argument(
+        "--thresholds",
+        type=str,
+        default=",".join(f"{t:g}" for t in DEFAULT_THRESHOLDS),
+        help="comma-separated Sobel cutoffs to sweep",
+    )
+    args = ap.parse_args()
+    thresholds = [float(t) for t in args.thresholds.split(",")]
+
+    try:
+        res = run_validation(limit=args.limit, thresholds=thresholds)
+    except (FileNotFoundError, RuntimeError) as e:
+        sys.exit(str(e))
+
+    RESULTS.mkdir(exist_ok=True)
     with (RESULTS / "wrinkle_per_image.csv").open("w") as f:
         f.write("ffhq_id,wrinkle_raw_roi,gt_density_roi,wrinkle_raw_whole,gt_density_whole\n")
-        for fid, mr, dr, mw, dw in rows:
+        for fid, mr, dr, mw, dw in res["rows"]:
             f.write(f"{fid},{mr:.6f},{dr:.6f},{mw:.6f},{dw:.6f}\n")
 
-    print(f"\nProcessed {n_done} faces ({n_detect_fail} skipped: no face / no ROI).\n")
+    print(f"\nProcessed {res['n']} faces ({res['n_detect_fail']} skipped: no face / no ROI).\n")
     print("Q1  Ranking validity  (per-face wrinkle_raw vs human mask coverage)")
     print(
-        f"    skin ROIs   Spearman rho = {spearman(roi_metric, roi_gt):+.3f}   "
-        f"Pearson r = {pearson(roi_metric, roi_gt):+.3f}   ← production behavior"
+        f"    skin ROIs   Spearman rho = {res['roi_spearman']:+.3f}   "
+        f"Pearson r = {res['roi_pearson']:+.3f}   ← production behavior"
     )
     print(
-        f"    whole face  Spearman rho = {spearman(whole_metric, whole_gt):+.3f}   "
-        f"Pearson r = {pearson(whole_metric, whole_gt):+.3f}   (contrast: eyes/hair contaminate)"
+        f"    whole face  Spearman rho = {res['whole_spearman']:+.3f}   "
+        f"Pearson r = {res['whole_pearson']:+.3f}   (contrast: eyes/hair contaminate)"
     )
-    lo, hi = np.percentile(roi_metric, [5, 95])
     print(
-        f"    wrinkle_raw(ROI) p5-p95 = [{lo:.3f}, {hi:.3f}]   "
+        f"    wrinkle_raw(ROI) p5-p95 = [{res['raw_p5']:.3f}, {res['raw_p95']:.3f}]   "
         f"current WRINKLE_RAW_RANGE = {WRINKLE_RAW_RANGE}"
     )
     print()
 
     print("Q2  Localization / cutoff tuning  (firing pixels vs masks, inside skin ROIs)")
     print("    cutoff   precision   recall      F1")
-    sweep_rows = []
-    best = (None, -1.0)
-    for t in thresholds:
-        prec = tp[t] / (tp[t] + fp[t]) if tp[t] + fp[t] else 0.0
-        rec = tp[t] / (tp[t] + fn[t]) if tp[t] + fn[t] else 0.0
-        f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
-        sweep_rows.append((t, prec, rec, f1))
-        if f1 > best[1]:
-            best = (t, f1)
+    for t, prec, rec, f1 in res["sweep"]:
         print(f"    {t:6.0f}   {prec:8.3f}   {rec:7.3f}   {f1:6.3f}")
 
     with (RESULTS / "wrinkle_threshold_sweep.csv").open("w") as f:
         f.write("sobel_cutoff,precision,recall,f1\n")
-        for t, p, rc, f1 in sweep_rows:
+        for t, p, rc, f1 in res["sweep"]:
             f.write(f"{t},{p:.6f},{rc:.6f},{f1:.6f}\n")
     print(
-        f"\n    → F1-max cutoff = {best[0]:.0f} (F1={best[1]:.3f}); "
-        "wrinkle_raw currently hard-codes 30 (scoring.py:196)."
+        f"\n    → F1-max cutoff = {res['best_cutoff']:.0f} (F1={res['best_f1']:.3f}); "
+        "wrinkle_raw hard-codes 30 (scoring.py)."
     )
 
     try:
@@ -266,11 +314,13 @@ def main() -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
+        roi_gt_a = np.array([r[2] for r in res["rows"]])
+        roi_metric_a = np.array([r[1] for r in res["rows"]])
         fig, ax = plt.subplots(figsize=(6, 5), dpi=120)
-        ax.scatter(roi_gt * 100, roi_metric, s=8, alpha=0.4, color="#2b6cb0")
+        ax.scatter(roi_gt_a * 100, roi_metric_a, s=8, alpha=0.4, color="#2b6cb0")
         ax.set_xlabel("Human wrinkle coverage inside skin ROIs (%)")
         ax.set_ylabel("wrinkle_raw (ROI Sobel firing ratio)")
-        ax.set_title(f"FFHQ-Wrinkle · n={n_done} · Spearman ρ={spearman(roi_metric, roi_gt):.2f}")
+        ax.set_title(f"FFHQ-Wrinkle · n={res['n']} · Spearman ρ={res['roi_spearman']:.2f}")
         fig.tight_layout()
         fig.savefig(RESULTS / "wrinkle_scatter.png")
         print(f"\nWrote results to {RESULTS}/")
