@@ -7,6 +7,7 @@ wait for MediaPipe re-run -> screenshot the real face in its system state.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -16,10 +17,8 @@ OUT = Path(__file__).resolve().parents[1] / "docs" / "assets"
 
 
 def settle(page, ms: int = 3500) -> None:
-    try:
+    with contextlib.suppress(Exception):
         page.wait_for_load_state("networkidle", timeout=8000)
-    except Exception:
-        pass
     page.wait_for_timeout(ms)
 
 

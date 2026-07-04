@@ -12,6 +12,7 @@ Usage:  uv run python scripts/capture_app.py
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -23,10 +24,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 def settle(page, ms: int = 3500) -> None:
     """Wait for a Streamlit rerun to finish."""
-    try:
+    with contextlib.suppress(Exception):
         page.wait_for_load_state("networkidle", timeout=8000)
-    except Exception:
-        pass
     page.wait_for_timeout(ms)
 
 

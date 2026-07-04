@@ -6,6 +6,7 @@ Select EricZou -> 新增就診 -> 上傳照片 fallback tab -> upload a known-ba
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -17,10 +18,8 @@ BAD = ROOT / "data" / "test_images" / "test_face_1.jpg"
 
 
 def settle(page, ms: int = 3500) -> None:
-    try:
+    with contextlib.suppress(Exception):
         page.wait_for_load_state("networkidle", timeout=8000)
-    except Exception:
-        pass
     page.wait_for_timeout(ms)
 
 
