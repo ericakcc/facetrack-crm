@@ -1,4 +1,5 @@
 """Unit tests for the pure JS capture-decision logic (via Playwright)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,9 +26,7 @@ def page():
 
 
 def test_smoother_first_update_is_identity(page):
-    out = page.evaluate(
-        "() => CaptureLogic.makePoseSmoother(0.5).update({yaw:10,pitch:0,roll:0})"
-    )
+    out = page.evaluate("() => CaptureLogic.makePoseSmoother(0.5).update({yaw:10,pitch:0,roll:0})")
     assert out["yaw"] == 10
 
 
@@ -50,16 +49,12 @@ def test_stability_rises_and_locks(page):
 
 
 def test_stability_falls_symmetrically(page):
-    count = page.evaluate(
-        "() => CaptureLogic.stabilityStep({count:2,locked:false},false,5).count"
-    )
+    count = page.evaluate("() => CaptureLogic.stabilityStep({count:2,locked:false},false,5).count")
     assert count == 1
 
 
 def test_stability_stays_locked_once_locked(page):
-    locked = page.evaluate(
-        "() => CaptureLogic.stabilityStep({count:0,locked:true},false,3).locked"
-    )
+    locked = page.evaluate("() => CaptureLogic.stabilityStep({count:0,locked:true},false,3).locked")
     assert locked is True
 
 
@@ -83,7 +78,42 @@ def test_pick_sharpest_falls_back_when_none_in_tolerance(page):
 
 
 def test_laplacian_flat_image_is_zero(page):
-    var = page.evaluate(
-        "() => CaptureLogic.laplacianVariance(new Uint8Array(9).fill(128),3,3)"
-    )
+    var = page.evaluate("() => CaptureLogic.laplacianVariance(new Uint8Array(9).fill(128),3,3)")
     assert var == 0
+
+
+def test_smoother_ema_direction_with_asymmetric_alpha(page):
+    out = page.evaluate(
+        "() => { const s=CaptureLogic.makePoseSmoother(0.25);"
+        "s.update({yaw:0,pitch:0,roll:0});"
+        "return s.update({yaw:100,pitch:0,roll:0}); }"
+    )
+    assert out["yaw"] == 25  # 0.25*100 + 0.75*0 ; transposed would give 75
+
+
+def test_smoother_reset_restores_identity(page):
+    out = page.evaluate(
+        "() => { const s=CaptureLogic.makePoseSmoother(0.5);"
+        "s.update({yaw:0,pitch:0,roll:0}); s.update({yaw:50,pitch:0,roll:0});"
+        "s.reset(); return s.update({yaw:8,pitch:0,roll:0}); }"
+    )
+    assert out["yaw"] == 8
+
+
+def test_pick_sharpest_empty_returns_null(page):
+    result = page.evaluate("() => CaptureLogic.pickSharpestFrame([])")
+    assert result is None
+
+
+def test_stability_clamps_at_bounds(page):
+    hi = page.evaluate(
+        "() => { let st={count:0,locked:false};"
+        "for (let i=0;i<10;i++) st=CaptureLogic.stabilityStep(st,true,3);"
+        "return st.count; }"
+    )
+    lo = page.evaluate(
+        "() => { let st={count:1,locked:false};"
+        "for (let i=0;i<5;i++) st=CaptureLogic.stabilityStep(st,false,3);"
+        "return st.count; }"
+    )
+    assert hi == 3 and lo == 0
