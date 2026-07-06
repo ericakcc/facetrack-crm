@@ -353,12 +353,12 @@
       <button id="retakeBtn" disabled>重拍當前</button>
       <button id="resetBtn">全部重來</button>
       <button id="shutterBtn" disabled>📸 手動拍攝</button>
-      <button id="ghostBtn">👻 疊圖：開</button>
+      <button id="ghostBtn">👻 疊圖：關</button>
       <button id="finishBtn" class="primary" disabled>✓ 完成（送回 Python）</button>
     </div>
 
     <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
-    <div class="build-tag">build 2026-07-06 v16 · manual shutter now enforces min face size</div>
+    <div class="build-tag">build 2026-07-06 v17 · fit-to-oval gate (oval now drives capture) + ghost off by default</div>
   </div>
 
   <script src="capture_logic.js"></script>
@@ -392,11 +392,17 @@
       frontPitchTolDeg: 10,
       minFaceWidthRatio: 0.35,
       maxFaceWidthRatio: 0.75,
+      // Target-oval geometry (normalized to canvas w/h) — the SAME numbers drive
+      // both the drawn oval and the capture gate, so "fits the oval" is what
+      // actually triggers a capture. Tune these to make the guide stricter/looser.
+      ovalCY: 0.46, ovalRX: 0.22, ovalRY: 0.32,
+      ovalCenterTolX: 0.12, ovalCenterTolY: 0.14, // how far off-centre is still OK
+      ovalFillMin: 0.72, ovalFillMax: 1.05,        // face height / oval height band
     };
 
     // -------- Ghost overlay (prior-visit photo faintly under the preview) --
     const ghostImgs = { front: null, left: null, right: null };
-    let ghostOn = true;
+    let ghostOn = false; // opt-in: prior-visit framing often differs, so off by default
     function loadGhost(dataUrl) {
       if (!dataUrl) return null;
       const img = new Image();
@@ -479,7 +485,7 @@
     let lastInPose = false; // last computed in-pose state, drives the target oval colour
     let lastDetected = false; // last frame's face-detected state, drives the manual shutter button
     let lastPose = { yaw: 0, pitch: 0, roll: 0 }; // last smoothed pose, used by the manual shutter
-    let lastFaceWidthRatio = 0; // last measured face-width fraction, so the manual shutter can enforce distance
+    let lastFillFrac = 0;     // last face-height / oval-height fill fraction (manual shutter distance guard)
 
     // Grayscale a downscaled center crop of the current video frame and return
     // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
@@ -945,8 +951,8 @@
     }
 
     function drawTargetOval(inPose) {
-      const cx = canvas.width / 2, cy = canvas.height * 0.46;
-      const rx = canvas.width * 0.22, ry = canvas.height * 0.32;
+      const cx = canvas.width * 0.5, cy = canvas.height * cfg.ovalCY;
+      const rx = canvas.width * cfg.ovalRX, ry = canvas.height * cfg.ovalRY;
       ctx.save();
       ctx.lineWidth = 4;
       ctx.setLineDash([12, 10]);
@@ -967,7 +973,7 @@
       const ghost = gm ? ghostImgs[gm] : null;
       if (ghostOn && ghost && ghost.complete && ghost.naturalWidth > 0) {
         ctx.save();
-        ctx.globalAlpha = 0.25;
+        ctx.globalAlpha = 0.18;
         ctx.drawImage(ghost, 0, 0, canvas.width, canvas.height);
         ctx.restore();
       }
@@ -986,15 +992,28 @@
           // Face-frame size ratio: how much of the frame width the face fills.
           // Used as a distance proxy — too small = blurry skin texture; too big
           // = chin/ears clipped, alignment landmarks unreliable.
-          let minX = 1, maxX = 0;
+          let minX = 1, maxX = 0, minY = 1, maxY = 0;
           for (let i = 0; i < landmarks.length; i++) {
             const p = landmarks[i];
             if (!p) continue;
             if (p.x < minX) minX = p.x;
             if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
           }
           const faceWidthRatio = Math.max(0, maxX - minX);
-          lastFaceWidthRatio = faceWidthRatio;
+          // Fit-to-oval: does the face bbox sit centred in and fill the target
+          // oval? These numbers use the SAME cfg oval geometry as drawTargetOval,
+          // so the drawn circle and the capture gate are one and the same.
+          const faceCX = (minX + maxX) / 2, faceCY = (minY + maxY) / 2;
+          const fillFrac = (maxY - minY) / (2 * cfg.ovalRY);
+          const offCentre =
+            Math.abs(faceCX - 0.5) > cfg.ovalCenterTolX ||
+            Math.abs(faceCY - cfg.ovalCY) > cfg.ovalCenterTolY;
+          const tooFar = fillFrac < cfg.ovalFillMin;
+          const tooClose = fillFrac > cfg.ovalFillMax;
+          const fitsOval = !offCentre && !tooFar && !tooClose;
+          lastFillFrac = fillFrac;
 
           const mat =
             result.facialTransformationMatrixes &&
@@ -1006,7 +1025,7 @@
             yawValEl.textContent = yaw.toFixed(1) + "°";
             pitchValEl.textContent = pitch.toFixed(1) + "°";
             rollValEl.textContent = roll.toFixed(1) + "°";
-            sizeValEl.textContent = (faceWidthRatio * 100).toFixed(0) + "%";
+            sizeValEl.textContent = "填 " + (fillFrac * 100).toFixed(0) + "%";
 
             const mode = currentMode();
             if (mode && !captures[mode]) {
@@ -1016,15 +1035,12 @@
                                    yaw >= cfg.profileYawMinDeg;
               const pitchTol = mode === "front" ? cfg.frontPitchTolDeg : cfg.profilePitchTolDeg;
               const pitchOk = Math.abs(pitch) <= pitchTol;
-              const tooFar = faceWidthRatio < cfg.minFaceWidthRatio;
-              const tooClose = faceWidthRatio > cfg.maxFaceWidthRatio;
-              const distanceOk = !tooFar && !tooClose;
               yawValEl.className = "val " + (yawOk ? "ok" : "bad");
               pitchValEl.className = "val " + (pitchOk ? "ok" : "bad");
-              sizeValEl.className = "val " + (distanceOk ? "ok" : "bad");
+              sizeValEl.className = "val " + (fitsOval ? "ok" : "bad");
               rollValEl.className = "val";
 
-              const inPose = yawOk && pitchOk && distanceOk;
+              const inPose = yawOk && pitchOk && fitsOval;
               lastInPose = inPose;
               lastPose = { yaw, pitch, roll };
 
@@ -1040,13 +1056,12 @@
               // unmirrored HTML #instruction element — never drawn onto the
               // mirrored <canvas>, so left/right hints always read correctly.
               if (burst === null) {
-                if (yawOk && pitchOk && tooFar) {
-                  instructionEl.textContent =
-                    "📍 太遠了！請靠近鏡頭一點（臉佔畫面要 ≥ " +
-                    Math.round(cfg.minFaceWidthRatio * 100) + "%）";
-                } else if (yawOk && pitchOk && tooClose) {
-                  instructionEl.textContent =
-                    "📍 太近了！請稍微後退（避免下巴/耳朵超出畫面）";
+                if (offCentre) {
+                  instructionEl.textContent = "⭕ 請把臉移到圓圈中央";
+                } else if (tooFar) {
+                  instructionEl.textContent = "📍 請靠近一點，讓臉填滿圓圈";
+                } else if (tooClose) {
+                  instructionEl.textContent = "📍 太近了！請稍微後退";
                 } else if (mode === "front") {
                   instructionEl.textContent = (yawOk && pitchOk) ? "保持住…" : "請正對鏡頭";
                 } else if (!yawOk) {
@@ -1189,13 +1204,11 @@
       if (!mode || !lastDetected) return;
       // The escape hatch bypasses angle/pose gating (its whole purpose), but
       // distance is NOT bypassable — a too-small face yields garbage skin data.
-      if (lastFaceWidthRatio < cfg.minFaceWidthRatio) {
-        instructionEl.textContent =
-          "📍 太遠了！臉太小無法拍攝，請靠近鏡頭一點（臉佔畫面要 ≥ " +
-          Math.round(cfg.minFaceWidthRatio * 100) + "%）";
+      if (lastFillFrac < cfg.ovalFillMin) {
+        instructionEl.textContent = "📍 臉太小無法拍攝，請靠近一點讓臉填滿圓圈";
         return;
       }
-      if (lastFaceWidthRatio > cfg.maxFaceWidthRatio) {
+      if (lastFillFrac > cfg.ovalFillMax) {
         instructionEl.textContent = "📍 太近了！請稍微後退再拍";
         return;
       }
