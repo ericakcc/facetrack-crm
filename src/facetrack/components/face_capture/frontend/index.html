@@ -130,50 +130,6 @@
       stroke: var(--green);
       filter: drop-shadow(0 0 8px rgba(74, 222, 128, 0.7));
     }
-    /* Big centred countdown number displayed inside the stage between the
-       moment a stable pose is detected and the moment the JPEG is captured.
-       Goes 3 → 2 → 1 → 📸 with a pulse per tick. */
-    .countdown-overlay {
-      position: absolute;
-      inset: 0;
-      z-index: 4;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-      background: radial-gradient(circle at center,
-                                  rgba(0, 240, 255, 0.08) 0%,
-                                  transparent 60%);
-    }
-    .countdown-overlay.active { display: flex; }
-    .countdown-number {
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-weight: 900;
-      font-size: 180px;
-      line-height: 1;
-      color: var(--green);
-      text-shadow: 0 0 24px rgba(74, 222, 128, 0.85),
-                   0 0 64px rgba(74, 222, 128, 0.45);
-      animation: countdownPulse 0.9s cubic-bezier(0.2, 0.7, 0.3, 1);
-    }
-    .countdown-number.flash {
-      color: #ffffff;
-      font-size: 110px;
-      text-shadow: 0 0 36px rgba(255, 255, 255, 0.95),
-                   0 0 96px rgba(0, 240, 255, 0.6);
-      animation: countdownFlash 0.45s ease-out;
-    }
-    @keyframes countdownPulse {
-      0%   { transform: scale(0.4); opacity: 0; }
-      18%  { transform: scale(1.25); opacity: 1; }
-      45%  { transform: scale(1.00); opacity: 1; }
-      100% { transform: scale(0.92); opacity: 0.85; }
-    }
-    @keyframes countdownFlash {
-      0%   { transform: scale(0.7); opacity: 0; }
-      30%  { transform: scale(1.4); opacity: 1; }
-      100% { transform: scale(1.0); opacity: 0.95; }
-    }
     .instruction {
       background: rgba(10, 10, 18, 0.85);
       backdrop-filter: blur(10px);
@@ -330,9 +286,6 @@
     <div class="stage">
       <video id="cam" playsinline autoplay muted></video>
       <canvas id="overlay"></canvas>
-      <div id="countdownOverlay" class="countdown-overlay">
-        <div id="countdownNumber" class="countdown-number">3</div>
-      </div>
       <div class="hud">
         <div class="hud-top">
           <div id="modeBadge" class="mode-badge">⏳ 初始化…</div>
@@ -381,6 +334,7 @@
     <div class="build-tag">build 2026-05-18T21:55 v13 · sharpness on face crop, JPEG q=0.95</div>
   </div>
 
+  <script src="capture_logic.js"></script>
   <script type="module">
     // -------- Streamlit message bridge -----------------------------------
     function sendToStreamlit(type, payload = {}) {
@@ -402,7 +356,8 @@
     // -------- Defaults (overridden by Python via streamlit:render) -------
     const cfg = {
       stabilityFrames: 10,
-      countdownMs: 3000,
+      poseEmaAlpha: 0.35,
+      burstMs: 500,
       profileYawMinDeg: 5,
       profilePitchTolDeg: 15,
       frontYawTolDeg: 8,
@@ -465,7 +420,7 @@
     const SEQUENCE = ["front", "left", "right"];
     const MODE_LABELS = { front: "正臉", left: "左側臉", right: "右側臉" };
     const INSTRUCTIONS = {
-      front: "請正對鏡頭、視線平視，鎖定後會倒數 3 秒拍照…",
+      front: "請正對鏡頭、視線平視，姿勢保持穩定即自動擷取…",
       left: "請輕微將頭轉向您的左邊（yaw < -5° 即可鎖定，只需露出左頰膚質）…",
       right: "請輕微將頭轉向您的右邊（yaw > +5° 即可鎖定，只需露出右頰膚質）…",
     };
@@ -473,32 +428,32 @@
     // -------- State ------------------------------------------------------
     let faceLandmarker = null;
     let FaceLandmarkerCls = null;
-    let lockedAt = null;            // ms timestamp when pose locked (= countdown start)
-    let lastCountdownSecond = null; // tick tracker so we only re-animate on second changes
-    const countdownOverlay = document.getElementById("countdownOverlay");
-    const countdownNumberEl = document.getElementById("countdownNumber");
-
-    function showCountdown(secondsRemaining) {
-      countdownOverlay.classList.add("active");
-      const label = secondsRemaining <= 0 ? "📸" : String(secondsRemaining);
-      if (lastCountdownSecond === secondsRemaining) return;
-      lastCountdownSecond = secondsRemaining;
-      countdownNumberEl.textContent = label;
-      countdownNumberEl.classList.toggle("flash", secondsRemaining <= 0);
-      // Force animation restart.
-      countdownNumberEl.style.animation = "none";
-      void countdownNumberEl.offsetWidth;
-      countdownNumberEl.style.animation = "";
-    }
-
-    function hideCountdown() {
-      countdownOverlay.classList.remove("active");
-      lastCountdownSecond = null;
-    }
     let captures = { front: null, left: null, right: null };
     let currentIdx = 0;
-    let stableCount = 0;
+    let poseSmoother = CaptureLogic.makePoseSmoother(cfg.poseEmaAlpha);
+    let stabilityState = { count: 0, locked: false };
+    let burst = null; // {startedAt, frames:[]} while CAPTURING
     let running = false;
+
+    // Grayscale a downscaled center crop of the current video frame and return
+    // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
+    // run per burst frame.
+    const sharpCanvas = document.createElement("canvas");
+    sharpCanvas.width = 128;
+    sharpCanvas.height = 128;
+    const sharpCtx = sharpCanvas.getContext("2d", { willReadFrequently: true });
+    function frameSharpness() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const side = Math.min(vw, vh);
+      const sx = (vw - side) / 2, sy = (vh - side) / 2;
+      sharpCtx.drawImage(video, sx, sy, side, side, 0, 0, 128, 128);
+      const { data } = sharpCtx.getImageData(0, 0, 128, 128);
+      const gray = new Uint8Array(128 * 128);
+      for (let i = 0, g = 0; i < data.length; i += 4, g++) {
+        gray[g] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+      }
+      return CaptureLogic.laplacianVariance(gray, 128, 128);
+    }
 
     function currentMode() {
       return SEQUENCE[currentIdx] || null;
@@ -974,7 +929,9 @@
             result.facialTransformationMatrixes &&
             result.facialTransformationMatrixes[0];
           if (mat && mat.data) {
-            const { yaw, pitch, roll } = eulerFromMatrix(mat.data);
+            let { yaw, pitch, roll } = eulerFromMatrix(mat.data);
+            const sm = poseSmoother.update({ yaw, pitch, roll });
+            yaw = sm.yaw; pitch = sm.pitch; roll = sm.roll;
             yawValEl.textContent = yaw.toFixed(1) + "°";
             pitchValEl.textContent = pitch.toFixed(1) + "°";
             rollValEl.textContent = roll.toFixed(1) + "°";
@@ -997,7 +954,7 @@
               rollValEl.className = "val";
 
               // Dynamic instruction priority: lock > distance > orientation.
-              if (lockedAt === null) {
+              if (!stabilityState.locked) {
                 if (yawOk && pitchOk && tooFar) {
                   instructionEl.textContent =
                     "📍 太遠了！請靠近鏡頭一點（臉佔畫面要 ≥ " +
@@ -1011,57 +968,44 @@
               }
 
               const inPose = yawOk && pitchOk && distanceOk;
-              if (inPose) {
-                stableCount = Math.min(stableCount + 1, cfg.stabilityFrames);
-                modeBadge.classList.add("in-pose");
-                progRing.classList.add("in-pose");
-              } else {
-                stableCount = Math.max(stableCount - 2, 0);
-                modeBadge.classList.remove("in-pose");
-                progRing.classList.remove("in-pose");
-              }
-              const progress = stableCount / cfg.stabilityFrames;
-              progArc.setAttribute(
-                "stroke-dashoffset",
-                String(ARC_LEN * (1 - progress))
+              stabilityState = CaptureLogic.stabilityStep(
+                stabilityState, inPose, cfg.stabilityFrames
               );
+              modeBadge.classList.toggle("in-pose", inPose);
+              progRing.classList.toggle("in-pose", inPose);
+              const progress = stabilityState.count / cfg.stabilityFrames;
+              progArc.setAttribute("stroke-dashoffset", String(ARC_LEN * (1 - progress)));
 
-              if (lockedAt === null) {
-                // SEEKING — fill the progress ring until a stable pose is held
-                // long enough to commit, then enter the COUNTDOWN phase.
-                if (stableCount >= cfg.stabilityFrames) {
-                  lockedAt = performance.now();
-                  instructionEl.textContent = "🎯 鎖定！請保持姿勢…";
-                  logStep(`pose locked (${mode}) — countdown begin`, "ok");
-                }
-              } else {
-                // COUNTDOWN — render the big number; capture when it expires.
-                // Brief out-of-pose wobble does NOT cancel: by this point the
-                // user has already been told to hold still, and cancelling on
-                // every micro-movement is worse UX than capturing a slightly
-                // wobbly frame (ConsistencyGate will catch genuinely-bad ones
-                // on the Python side anyway).
-                const elapsed = performance.now() - lockedAt;
-                const remaining = cfg.countdownMs - elapsed;
-                if (remaining <= 0) {
-                  showCountdown(0);  // flash 📸 once before clearing
-                  const b64 = captureJpeg();
+              if (!stabilityState.locked) {
+                if (inPose) instructionEl.textContent = "保持住…";
+              } else if (burst === null) {
+                // Enter CAPTURING: open a short burst window.
+                burst = { startedAt: performance.now(), frames: [] };
+                instructionEl.textContent = "📸 擷取中…";
+                logStep(`pose locked (${mode}) — burst begin`, "ok");
+              }
+
+              if (burst !== null) {
+                burst.frames.push({
+                  jpeg: captureJpeg(),
+                  score: frameSharpness(),
+                  inTolerance: inPose,
+                  yaw, pitch, roll,
+                });
+                if (performance.now() - burst.startedAt >= cfg.burstMs) {
+                  const best = CaptureLogic.pickSharpestFrame(burst.frames);
                   captures[mode] = {
-                    jpeg_b64: b64,
-                    yaw,
-                    pitch,
-                    roll,
+                    jpeg_b64: best.jpeg,
+                    yaw: best.yaw, pitch: best.pitch, roll: best.roll,
                     captured_at: new Date().toISOString(),
                   };
-                  setThumb(mode, b64);
-                  stableCount = 0;
-                  lockedAt = null;
+                  setThumb(mode, best.jpeg);
+                  burst = null;
+                  stabilityState = { count: 0, locked: false };
+                  poseSmoother.reset();
                   progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
                   currentIdx += 1;
                   updateUI();
-                  setTimeout(hideCountdown, 350);
-                } else {
-                  showCountdown(Math.ceil(remaining / 1000));
                 }
               }
             }
@@ -1077,41 +1021,39 @@
         yawValEl.className = "val";
         pitchValEl.className = "val";
         sizeValEl.className = "val";
-        if (lockedAt === null) {
-          // Only erode the seeking ring when we haven't already committed.
-          stableCount = Math.max(stableCount - 2, 0);
+        if (burst === null) {
+          // Only erode the seeking ring when we haven't already started a burst.
+          stabilityState = CaptureLogic.stabilityStep(stabilityState, false, cfg.stabilityFrames);
           progArc.setAttribute(
             "stroke-dashoffset",
-            String(ARC_LEN * (1 - stableCount / cfg.stabilityFrames))
+            String(ARC_LEN * (1 - stabilityState.count / cfg.stabilityFrames))
           );
           modeBadge.classList.remove("in-pose");
           progRing.classList.remove("in-pose");
         } else {
-          // We're mid-countdown but the face dropped out (eg. turned too far
-          // for MediaPipe on a side profile). Keep counting down so the user
-          // doesn't have to start over; tick the visible number too.
+          // We're mid-burst but the face dropped out entirely (eg. turned too
+          // far for MediaPipe on a side profile, or a momentary occlusion).
+          // Keep the burst window running on wall-clock time so the user
+          // doesn't have to start over; finalize using whichever frames were
+          // captured while the face WAS detected.
           const mode = currentMode();
-          if (mode && !captures[mode]) {
-            const remaining = cfg.countdownMs - (performance.now() - lockedAt);
-            if (remaining <= 0) {
-              showCountdown(0);
-              const b64 = captureJpeg();
-              captures[mode] = {
-                jpeg_b64: b64,
-                yaw: 0, pitch: 0, roll: 0,
-                captured_at: new Date().toISOString(),
-                face_lost_at_capture: true,
-              };
-              setThumb(mode, b64);
-              stableCount = 0;
-              lockedAt = null;
-              progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
-              currentIdx += 1;
-              updateUI();
-              setTimeout(hideCountdown, 350);
-            } else {
-              showCountdown(Math.ceil(remaining / 1000));
-            }
+          if (mode && !captures[mode] && performance.now() - burst.startedAt >= cfg.burstMs) {
+            const best = CaptureLogic.pickSharpestFrame(burst.frames) || {
+              jpeg: captureJpeg(), yaw: 0, pitch: 0, roll: 0,
+            };
+            captures[mode] = {
+              jpeg_b64: best.jpeg,
+              yaw: best.yaw, pitch: best.pitch, roll: best.roll,
+              captured_at: new Date().toISOString(),
+              face_lost_at_capture: true,
+            };
+            setThumb(mode, best.jpeg);
+            burst = null;
+            stabilityState = { count: 0, locked: false };
+            poseSmoother.reset();
+            progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+            currentIdx += 1;
+            updateUI();
           }
         }
       }
@@ -1132,9 +1074,9 @@
       captures[target] = null;
       clearThumb(target);
       currentIdx = SEQUENCE.indexOf(target);
-      stableCount = 0;
-      lockedAt = null;
-      hideCountdown();
+      stabilityState = { count: 0, locked: false };
+      burst = null;
+      poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
       updateUI();
     });
@@ -1143,9 +1085,9 @@
       captures = { front: null, left: null, right: null };
       for (const m of SEQUENCE) clearThumb(m);
       currentIdx = 0;
-      stableCount = 0;
-      lockedAt = null;
-      hideCountdown();
+      stabilityState = { count: 0, locked: false };
+      burst = null;
+      poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
       updateUI();
     });

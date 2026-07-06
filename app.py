@@ -705,7 +705,7 @@ def page_intake(patient: Patient) -> None:
 
     with source_tabs[0]:
         st.markdown(
-            "**操作流程**：對著鏡頭 → 系統偵測到正臉、鎖定後倒數 3 秒自動拍照 → 按下「✓ 完成」送回。"
+            "**操作流程**：對著鏡頭 → 系統偵測到正臉、姿勢保持穩定後自動擷取最清晰的畫面 → 按下「✓ 完成」送回。"
             "拍完正臉後若想多留一張側臉膚質紀錄，可繼續轉頭；不想拍直接按「完成」即可。"
         )
         ghosts = get_ghost_photos(patient.id)
