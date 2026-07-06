@@ -113,6 +113,28 @@
     .pose-readout .val { color: var(--text); }
     .pose-readout .val.ok { color: var(--green); }
     .pose-readout .val.bad { color: var(--red); }
+    .pose-readout-adv summary {
+      cursor: pointer;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 11px;
+      color: var(--muted);
+      background: rgba(10, 10, 18, 0.7);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      list-style: none;
+      user-select: none;
+    }
+    .pose-readout-adv summary::-webkit-details-marker { display: none; }
+    .pose-readout-adv[open] summary {
+      border-radius: 6px 6px 0 0;
+      border-bottom: none;
+    }
+    .pose-readout-adv[open] .pose-readout {
+      border-radius: 0 0 6px 6px;
+      border-top: none;
+    }
     .hud-bottom {
       display: flex;
       flex-direction: column;
@@ -289,12 +311,15 @@
       <div class="hud">
         <div class="hud-top">
           <div id="modeBadge" class="mode-badge">⏳ 初始化…</div>
-          <div class="pose-readout">
-            <span class="lbl">yaw</span>  <span id="yawVal" class="val">—</span><br />
-            <span class="lbl">pitch</span><span id="pitchVal" class="val">—</span><br />
-            <span class="lbl">roll</span> <span id="rollVal" class="val">—</span><br />
-            <span class="lbl">size</span> <span id="sizeVal" class="val">—</span>
-          </div>
+          <details class="pose-readout-adv">
+            <summary>進階</summary>
+            <div class="pose-readout">
+              <span class="lbl">yaw</span>  <span id="yawVal" class="val">—</span><br />
+              <span class="lbl">pitch</span><span id="pitchVal" class="val">—</span><br />
+              <span class="lbl">roll</span> <span id="rollVal" class="val">—</span><br />
+              <span class="lbl">size</span> <span id="sizeVal" class="val">—</span>
+            </div>
+          </details>
         </div>
         <div class="hud-bottom">
           <svg id="progRing" class="progress-ring" viewBox="0 0 56 56">
@@ -434,6 +459,7 @@
     let stabilityState = { count: 0, locked: false };
     let burst = null; // {startedAt, frames:[]} while CAPTURING
     let running = false;
+    let lastInPose = false; // last computed in-pose state, drives the target oval colour
 
     // Grayscale a downscaled center crop of the current video frame and return
     // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
@@ -898,11 +924,25 @@
       ctx.shadowBlur = 0;
     }
 
+    function drawTargetOval(inPose) {
+      const cx = canvas.width / 2, cy = canvas.height * 0.46;
+      const rx = canvas.width * 0.22, ry = canvas.height * 0.32;
+      ctx.save();
+      ctx.lineWidth = 4;
+      ctx.setLineDash([12, 10]);
+      ctx.strokeStyle = inPose ? "#37d67a" : "#f0a825";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     function loop() {
       if (!running) return;
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      drawTargetOval(stabilityState.locked || lastInPose);
 
       let detected = false;
       if (faceLandmarker && video.readyState >= 2) {
@@ -968,6 +1008,7 @@
               }
 
               const inPose = yawOk && pitchOk && distanceOk;
+              lastInPose = inPose;
               stabilityState = CaptureLogic.stabilityStep(
                 stabilityState, inPose, cfg.stabilityFrames
               );
