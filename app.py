@@ -39,6 +39,7 @@ from facetrack.db import (
     get_session,
     init_db,
 )
+from facetrack.ghost_photos import get_ghost_photos
 from facetrack.llm_explainer import get_explainer
 from facetrack.patient_service import (
     create_patient,
@@ -706,6 +707,7 @@ def page_intake(patient: Patient) -> None:
             "**操作流程**：對著鏡頭 → 系統偵測到正臉、鎖定後倒數 3 秒自動拍照 → 按下「✓ 完成」送回。"
             "拍完正臉後若想多留一張側臉膚質紀錄，可繼續轉頭；不想拍直接按「完成」即可。"
         )
+        ghosts = get_ghost_photos(patient.id)
         capture_value = face_capture(
             key=f"face_capture_{patient.id}",
             stability_frames=LIVE_CAPTURE_STABILITY_FRAMES,
@@ -716,6 +718,9 @@ def page_intake(patient: Patient) -> None:
             front_pitch_tol_deg=POSE_TOLERANCE_DEG + 2.0,
             min_face_width_ratio=LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
             max_face_width_ratio=LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
+            ghost_front=ghosts["front"],
+            ghost_left=ghosts["left"],
+            ghost_right=ghosts["right"],
         )
         if capture_value:
             front_image_bgr = _decode_b64_jpeg(capture_value["front"]["jpeg_b64"])

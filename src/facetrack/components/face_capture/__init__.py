@@ -66,6 +66,9 @@ def face_capture(
     front_pitch_tol_deg: float = 10.0,
     min_face_width_ratio: float = 0.35,
     max_face_width_ratio: float = 0.75,
+    ghost_front: str | None = None,
+    ghost_left: str | None = None,
+    ghost_right: str | None = None,
     height: int = 1200,
 ) -> dict[str, Any] | None:
     """Render the live face-mesh capture widget.
@@ -77,6 +80,9 @@ def face_capture(
         profile_pitch_tol_deg: Pitch tolerance while in profile mode.
         front_yaw_tol_deg: Yaw tolerance for the frontal pose.
         front_pitch_tol_deg: Pitch tolerance for the frontal pose.
+        ghost_front / ghost_left / ghost_right: Optional prior-visit photos as
+            data-URL strings, drawn faintly under the live preview to reproduce
+            framing. ``None`` hides that angle's overlay.
         height: iframe height in pixels.
 
     Returns:
@@ -91,6 +97,9 @@ def face_capture(
         frontPitchTolDeg=front_pitch_tol_deg,
         minFaceWidthRatio=min_face_width_ratio,
         maxFaceWidthRatio=max_face_width_ratio,
+        ghostFront=ghost_front,
+        ghostLeft=ghost_left,
+        ghostRight=ghost_right,
         height=height,
         key=key,
         default=None,
