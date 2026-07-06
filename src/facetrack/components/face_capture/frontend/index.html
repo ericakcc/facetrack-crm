@@ -937,6 +937,20 @@
       ctx.restore();
     }
 
+    function drawProfileGuide(mode, yaw) {
+      if (mode !== "left" && mode !== "right") return;
+      const target = cfg.profileYawMinDeg;
+      const enough = mode === "left" ? yaw <= -target : yaw >= target;
+      const cx = canvas.width / 2, cy = canvas.height * 0.12;
+      const dir = mode === "left" ? -1 : 1; // arrow points the way to turn
+      ctx.save();
+      ctx.fillStyle = enough ? "#37d67a" : "#f0a825";
+      ctx.font = "600 22px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(enough ? "已足夠 ✓" : (dir < 0 ? "◀ 再轉一點" : "再轉一點 ▶"), cx, cy);
+      ctx.restore();
+    }
+
     function loop() {
       if (!running) return;
       ctx.save();
@@ -978,6 +992,7 @@
             sizeValEl.textContent = (faceWidthRatio * 100).toFixed(0) + "%";
 
             const mode = currentMode();
+            drawProfileGuide(mode, yaw);
             if (mode && !captures[mode]) {
               const yawOk =
                 mode === "front" ? Math.abs(yaw) <= cfg.frontYawTolDeg :
