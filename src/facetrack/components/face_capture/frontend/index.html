@@ -352,6 +352,7 @@
     <div class="actions">
       <button id="retakeBtn" disabled>重拍當前</button>
       <button id="resetBtn">全部重來</button>
+      <button id="ghostBtn">👻 疊圖：開</button>
       <button id="finishBtn" class="primary" disabled>✓ 完成（送回 Python）</button>
     </div>
 
@@ -391,6 +392,16 @@
       maxFaceWidthRatio: 0.75,
     };
 
+    // -------- Ghost overlay (prior-visit photo faintly under the preview) --
+    const ghostImgs = { front: null, left: null, right: null };
+    let ghostOn = true;
+    function loadGhost(dataUrl) {
+      if (!dataUrl) return null;
+      const img = new Image();
+      img.src = dataUrl;
+      return img;
+    }
+
     window.addEventListener("message", (event) => {
       const data = event.data;
       if (!data || data.type !== "streamlit:render") return;
@@ -398,6 +409,9 @@
       for (const k of Object.keys(cfg)) {
         if (typeof args[k] === "number") cfg[k] = args[k];
       }
+      ghostImgs.front = loadGhost(args.ghostFront);
+      ghostImgs.left = loadGhost(args.ghostLeft);
+      ghostImgs.right = loadGhost(args.ghostRight);
       if (typeof args.height === "number") setFrameHeight(args.height);
     });
 
@@ -956,6 +970,16 @@
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const gm = currentMode();
+      const ghost = gm ? ghostImgs[gm] : null;
+      if (ghostOn && ghost && ghost.complete && ghost.naturalWidth > 0) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.drawImage(ghost, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
+
       drawTargetOval(stabilityState.locked || lastInPose);
 
       let detected = false;
@@ -1146,6 +1170,11 @@
       poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
       updateUI();
+    });
+
+    document.getElementById("ghostBtn").addEventListener("click", () => {
+      ghostOn = !ghostOn;
+      document.getElementById("ghostBtn").textContent = ghostOn ? "👻 疊圖：開" : "👻 疊圖：關";
     });
 
     finishBtn.addEventListener("click", () => {
