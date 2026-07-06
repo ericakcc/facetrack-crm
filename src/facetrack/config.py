@@ -109,8 +109,13 @@ SCORING_VERSION: int = 2
 # so a 5° profile threshold still gives a clean discrimination band.
 PROFILE_YAW_MIN_DEG: float = 5.0
 PROFILE_PITCH_TOLERANCE_DEG: float = 15.0
-LIVE_CAPTURE_STABILITY_FRAMES: int = 10
-LIVE_CAPTURE_COUNTDOWN_MS: int = 3000
+LIVE_CAPTURE_STABILITY_FRAMES: int = 6
+
+# Short burst window (ms) after lock; the sharpest in-tolerance frame in this
+# window is kept. Replaces the old fixed 3 s countdown dead-wait.
+LIVE_CAPTURE_BURST_MS: int = 500
+# EMA smoothing factor for head-pose angles (higher = snappier, less smooth).
+LIVE_CAPTURE_POSE_EMA_ALPHA: float = 0.35
 
 # Face-distance gating. Computed in the JS component as the ratio of the face
 # bounding-box width to the frame width. Skin texture metrics (pore, wrinkle)

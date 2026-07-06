@@ -59,11 +59,12 @@ def face_capture(
     *,
     key: str | None = None,
     stability_frames: int = 10,
-    countdown_ms: int = 3000,
     profile_yaw_min_deg: float = 5.0,
     profile_pitch_tol_deg: float = 15.0,
-    front_yaw_tol_deg: float = 8.0,
-    front_pitch_tol_deg: float = 10.0,
+    front_yaw_tol_deg: float = 15.0,
+    front_pitch_tol_deg: float = 17.0,
+    burst_ms: int = 500,
+    pose_ema_alpha: float = 0.35,
     min_face_width_ratio: float = 0.35,
     max_face_width_ratio: float = 0.75,
     ghost_front: str | None = None,
@@ -80,6 +81,10 @@ def face_capture(
         profile_pitch_tol_deg: Pitch tolerance while in profile mode.
         front_yaw_tol_deg: Yaw tolerance for the frontal pose.
         front_pitch_tol_deg: Pitch tolerance for the frontal pose.
+        burst_ms: Burst-window length (ms) after lock; the sharpest
+            in-tolerance frame in this window is kept.
+        pose_ema_alpha: EMA smoothing factor for head-pose angles (higher =
+            snappier, less smooth).
         ghost_front / ghost_left / ghost_right: Optional prior-visit photos as
             data-URL strings, drawn faintly under the live preview to reproduce
             framing. ``None`` hides that angle's overlay.
@@ -90,11 +95,12 @@ def face_capture(
     """
     return _component_func(
         stabilityFrames=stability_frames,
-        countdownMs=countdown_ms,
         profileYawMinDeg=profile_yaw_min_deg,
         profilePitchTolDeg=profile_pitch_tol_deg,
         frontYawTolDeg=front_yaw_tol_deg,
         frontPitchTolDeg=front_pitch_tol_deg,
+        burstMs=burst_ms,
+        poseEmaAlpha=pose_ema_alpha,
         minFaceWidthRatio=min_face_width_ratio,
         maxFaceWidthRatio=max_face_width_ratio,
         ghostFront=ghost_front,
