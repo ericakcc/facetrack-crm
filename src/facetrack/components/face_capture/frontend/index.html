@@ -358,7 +358,7 @@
     </div>
 
     <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
-    <div class="build-tag">build 2026-07-06 v17 · fit-to-oval gate (oval now drives capture) + ghost off by default</div>
+    <div class="build-tag">build 2026-07-06 v18 · per-mode fill (side stricter)</div>
   </div>
 
   <script src="capture_logic.js"></script>
@@ -397,7 +397,8 @@
       // actually triggers a capture. Tune these to make the guide stricter/looser.
       ovalCY: 0.46, ovalRX: 0.22, ovalRY: 0.32,
       ovalCenterTolX: 0.12, ovalCenterTolY: 0.14, // how far off-centre is still OK
-      ovalFillMin: 0.72, ovalFillMax: 1.05,        // face height / oval height band
+      ovalFillMin: 0.72, ovalFillMax: 1.05,        // front: face height / oval height band
+      ovalFillMinProfile: 0.82,                    // side needs to fill more (closer) for cheek detail
     };
 
     // -------- Ghost overlay (prior-visit photo faintly under the preview) --
@@ -1007,10 +1008,13 @@
           // so the drawn circle and the capture gate are one and the same.
           const faceCX = (minX + maxX) / 2, faceCY = (minY + maxY) / 2;
           const fillFrac = (maxY - minY) / (2 * cfg.ovalRY);
+          const _fitMode = currentMode();
+          const fillMin = (_fitMode === "left" || _fitMode === "right")
+            ? cfg.ovalFillMinProfile : cfg.ovalFillMin;
           const offCentre =
             Math.abs(faceCX - 0.5) > cfg.ovalCenterTolX ||
             Math.abs(faceCY - cfg.ovalCY) > cfg.ovalCenterTolY;
-          const tooFar = fillFrac < cfg.ovalFillMin;
+          const tooFar = fillFrac < fillMin;
           const tooClose = fillFrac > cfg.ovalFillMax;
           const fitsOval = !offCentre && !tooFar && !tooClose;
           lastFillFrac = fillFrac;
