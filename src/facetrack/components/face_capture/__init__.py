@@ -2,7 +2,9 @@
 
 Renders a webcam stream with a neon face-mesh overlay, computes head pose
 client-side from MediaPipe's `facialTransformationMatrixes`, and auto-captures
-a JPEG when the user holds the requested pose stable for ~0.6 s.
+a JPEG when the user holds the requested pose stable for ~1.5 s (elapsed-time
+hold, not frame-count — see `LIVE_CAPTURE_HOLD_MS`). A manual-shutter button
+is also available as an escape hatch when auto-detect won't trigger.
 
 Returns a dict shaped:
 
@@ -59,6 +61,7 @@ def face_capture(
     *,
     key: str | None = None,
     stability_frames: int = 10,
+    hold_ms: int = 1500,
     profile_yaw_min_deg: float = 5.0,
     profile_pitch_tol_deg: float = 15.0,
     front_yaw_tol_deg: float = 15.0,
@@ -77,6 +80,12 @@ def face_capture(
     Args:
         key: Streamlit widget key (must be stable across reruns).
         stability_frames: How many consecutive in-pose frames before auto-capture.
+            (Legacy frame-count meter; the JS component's lock trigger now uses
+            ``hold_ms`` instead, but this is still threaded through for any
+            other consumer of the raw config.)
+        hold_ms: Elapsed-time (ms) the pose must be held before auto-capture
+            locks and the sharpest-frame burst begins. Frame-rate independent,
+            unlike the old frame-count stability meter.
         profile_yaw_min_deg: Minimum |yaw| to count as a profile pose.
         profile_pitch_tol_deg: Pitch tolerance while in profile mode.
         front_yaw_tol_deg: Yaw tolerance for the frontal pose.
@@ -95,6 +104,7 @@ def face_capture(
     """
     return _component_func(
         stabilityFrames=stability_frames,
+        holdMs=hold_ms,
         profileYawMinDeg=profile_yaw_min_deg,
         profilePitchTolDeg=profile_pitch_tol_deg,
         frontYawTolDeg=front_yaw_tol_deg,

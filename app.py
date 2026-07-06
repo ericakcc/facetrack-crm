@@ -18,6 +18,7 @@ from sqlmodel import select
 from facetrack.components.face_capture import face_capture
 from facetrack.config import (
     LIVE_CAPTURE_BURST_MS,
+    LIVE_CAPTURE_HOLD_MS,
     LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
     LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
     LIVE_CAPTURE_POSE_EMA_ALPHA,
@@ -712,6 +713,7 @@ def page_intake(patient: Patient) -> None:
         capture_value = face_capture(
             key=f"face_capture_{patient.id}",
             stability_frames=LIVE_CAPTURE_STABILITY_FRAMES,
+            hold_ms=LIVE_CAPTURE_HOLD_MS,
             burst_ms=LIVE_CAPTURE_BURST_MS,
             pose_ema_alpha=LIVE_CAPTURE_POSE_EMA_ALPHA,
             profile_yaw_min_deg=PROFILE_YAW_MIN_DEG,

@@ -352,12 +352,13 @@
     <div class="actions">
       <button id="retakeBtn" disabled>重拍當前</button>
       <button id="resetBtn">全部重來</button>
+      <button id="shutterBtn" disabled>📸 手動拍攝</button>
       <button id="ghostBtn">👻 疊圖：開</button>
       <button id="finishBtn" class="primary" disabled>✓ 完成（送回 Python）</button>
     </div>
 
     <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
-    <div class="build-tag">build 2026-05-18T21:55 v13 · sharpness on face crop, JPEG q=0.95</div>
+    <div class="build-tag">build 2026-07-06 v15 · time-hold + manual shutter + off-canvas guidance</div>
   </div>
 
   <script src="capture_logic.js"></script>
@@ -382,6 +383,7 @@
     // -------- Defaults (overridden by Python via streamlit:render) -------
     const cfg = {
       stabilityFrames: 10,
+      holdMs: 1500,
       poseEmaAlpha: 0.35,
       burstMs: 500,
       profileYawMinDeg: 5,
@@ -432,6 +434,7 @@
     const progArc = document.getElementById("progArc");
     const retakeBtn = document.getElementById("retakeBtn");
     const resetBtn = document.getElementById("resetBtn");
+    const shutterBtn = document.getElementById("shutterBtn");
     const finishBtn = document.getElementById("finishBtn");
     const errorBanner = document.getElementById("errorBanner");
     const statusLine = document.getElementById("statusLine");
@@ -470,10 +473,12 @@
     let captures = { front: null, left: null, right: null };
     let currentIdx = 0;
     let poseSmoother = CaptureLogic.makePoseSmoother(cfg.poseEmaAlpha);
-    let stabilityState = { count: 0, locked: false };
+    let heldSince = null; // performance.now() when inPose last became true; null = not holding
     let burst = null; // {startedAt, frames:[]} while CAPTURING
     let running = false;
     let lastInPose = false; // last computed in-pose state, drives the target oval colour
+    let lastDetected = false; // last frame's face-detected state, drives the manual shutter button
+    let lastPose = { yaw: 0, pitch: 0, roll: 0 }; // last smoothed pose, used by the manual shutter
 
     // Grayscale a downscaled center crop of the current video frame and return
     // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
@@ -951,20 +956,6 @@
       ctx.restore();
     }
 
-    function drawProfileGuide(mode, yaw) {
-      if (mode !== "left" && mode !== "right") return;
-      const target = cfg.profileYawMinDeg;
-      const enough = mode === "left" ? yaw <= -target : yaw >= target;
-      const cx = canvas.width / 2, cy = canvas.height * 0.12;
-      const dir = mode === "left" ? -1 : 1; // arrow points the way to turn
-      ctx.save();
-      ctx.fillStyle = enough ? "#37d67a" : "#f0a825";
-      ctx.font = "600 22px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(enough ? "已足夠 ✓" : (dir < 0 ? "◀ 再轉一點" : "再轉一點 ▶"), cx, cy);
-      ctx.restore();
-    }
-
     function loop() {
       if (!running) return;
       ctx.save();
@@ -980,7 +971,7 @@
         ctx.restore();
       }
 
-      drawTargetOval(stabilityState.locked || lastInPose);
+      drawTargetOval(lastInPose);
 
       let detected = false;
       if (faceLandmarker && video.readyState >= 2) {
@@ -1016,7 +1007,6 @@
             sizeValEl.textContent = (faceWidthRatio * 100).toFixed(0) + "%";
 
             const mode = currentMode();
-            drawProfileGuide(mode, yaw);
             if (mode && !captures[mode]) {
               const yawOk =
                 mode === "front" ? Math.abs(yaw) <= cfg.frontYawTolDeg :
@@ -1032,8 +1022,22 @@
               sizeValEl.className = "val " + (distanceOk ? "ok" : "bad");
               rollValEl.className = "val";
 
-              // Dynamic instruction priority: lock > distance > orientation.
-              if (!stabilityState.locked) {
+              const inPose = yawOk && pitchOk && distanceOk;
+              lastInPose = inPose;
+              lastPose = { yaw, pitch, roll };
+
+              if (inPose) {
+                if (heldSince === null) heldSince = performance.now();
+              } else {
+                heldSince = null;
+                burst = null;
+              }
+
+              // Instruction priority: distance blocker > orientation guidance >
+              // "hold steady" while the timer fills. All of this drives the
+              // unmirrored HTML #instruction element — never drawn onto the
+              // mirrored <canvas>, so left/right hints always read correctly.
+              if (burst === null) {
                 if (yawOk && pitchOk && tooFar) {
                   instructionEl.textContent =
                     "📍 太遠了！請靠近鏡頭一點（臉佔畫面要 ≥ " +
@@ -1041,28 +1045,29 @@
                 } else if (yawOk && pitchOk && tooClose) {
                   instructionEl.textContent =
                     "📍 太近了！請稍微後退（避免下巴/耳朵超出畫面）";
+                } else if (mode === "front") {
+                  instructionEl.textContent = (yawOk && pitchOk) ? "保持住…" : "請正對鏡頭";
+                } else if (!yawOk) {
+                  instructionEl.textContent = mode === "left"
+                    ? "👈 請把頭輕輕轉向你的左邊"
+                    : "👉 請把頭輕輕轉向你的右邊";
                 } else {
-                  instructionEl.textContent = INSTRUCTIONS[mode];
+                  instructionEl.textContent = "角度可以了，保持住…";
                 }
               }
 
-              const inPose = yawOk && pitchOk && distanceOk;
-              lastInPose = inPose;
-              stabilityState = CaptureLogic.stabilityStep(
-                stabilityState, inPose, cfg.stabilityFrames
-              );
               modeBadge.classList.toggle("in-pose", inPose);
               progRing.classList.toggle("in-pose", inPose);
-              const progress = stabilityState.count / cfg.stabilityFrames;
+              const progress = heldSince
+                ? Math.min(1, (performance.now() - heldSince) / cfg.holdMs)
+                : 0;
               progArc.setAttribute("stroke-dashoffset", String(ARC_LEN * (1 - progress)));
 
-              if (!stabilityState.locked) {
-                if (inPose) instructionEl.textContent = "保持住…";
-              } else if (burst === null) {
+              if (progress >= 1 && burst === null) {
                 // Enter CAPTURING: open a short burst window.
                 burst = { startedAt: performance.now(), frames: [] };
                 instructionEl.textContent = "📸 擷取中…";
-                logStep(`pose locked (${mode}) — burst begin`, "ok");
+                logStep(`pose held ${cfg.holdMs}ms (${mode}) — burst begin`, "ok");
               }
 
               if (burst !== null) {
@@ -1081,7 +1086,7 @@
                   };
                   setThumb(mode, best.jpeg);
                   burst = null;
-                  stabilityState = { count: 0, locked: false };
+                  heldSince = null;
                   poseSmoother.reset();
                   progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
                   currentIdx += 1;
@@ -1101,13 +1106,11 @@
         yawValEl.className = "val";
         pitchValEl.className = "val";
         sizeValEl.className = "val";
+        lastInPose = false;
         if (burst === null) {
-          // Only erode the seeking ring when we haven't already started a burst.
-          stabilityState = CaptureLogic.stabilityStep(stabilityState, false, cfg.stabilityFrames);
-          progArc.setAttribute(
-            "stroke-dashoffset",
-            String(ARC_LEN * (1 - stabilityState.count / cfg.stabilityFrames))
-          );
+          // No face at all and no burst running — nothing is held.
+          heldSince = null;
+          progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
           modeBadge.classList.remove("in-pose");
           progRing.classList.remove("in-pose");
         } else {
@@ -1129,7 +1132,7 @@
             };
             setThumb(mode, best.jpeg);
             burst = null;
-            stabilityState = { count: 0, locked: false };
+            heldSince = null;
             poseSmoother.reset();
             progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
             currentIdx += 1;
@@ -1137,6 +1140,9 @@
           }
         }
       }
+
+      lastDetected = detected;
+      shutterBtn.disabled = !lastDetected || !currentMode();
 
       ctx.restore();
       requestAnimationFrame(loop);
@@ -1154,7 +1160,7 @@
       captures[target] = null;
       clearThumb(target);
       currentIdx = SEQUENCE.indexOf(target);
-      stabilityState = { count: 0, locked: false };
+      heldSince = null;
       burst = null;
       poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
@@ -1165,10 +1171,33 @@
       captures = { front: null, left: null, right: null };
       for (const m of SEQUENCE) clearThumb(m);
       currentIdx = 0;
-      stabilityState = { count: 0, locked: false };
+      heldSince = null;
       burst = null;
       poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+      updateUI();
+    });
+
+    shutterBtn.addEventListener("click", () => {
+      // Escape hatch: bypass the auto-gate entirely and capture the current
+      // frame for whatever mode is active, as long as a face is detected.
+      // Reuses captureJpeg() so the payload shape is identical to an
+      // auto-captured frame.
+      const mode = currentMode();
+      if (!mode || !lastDetected) return;
+      const jpeg = captureJpeg();
+      captures[mode] = {
+        jpeg_b64: jpeg,
+        yaw: lastPose.yaw, pitch: lastPose.pitch, roll: lastPose.roll,
+        captured_at: new Date().toISOString(),
+      };
+      setThumb(mode, jpeg);
+      burst = null;
+      heldSince = null;
+      poseSmoother.reset();
+      progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+      currentIdx += 1;
+      logStep(`manual shutter (${mode})`, "ok");
       updateUI();
     });
 
