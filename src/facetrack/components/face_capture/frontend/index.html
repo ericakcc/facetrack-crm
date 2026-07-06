@@ -382,16 +382,13 @@
 
     // -------- Defaults (overridden by Python via streamlit:render) -------
     const cfg = {
-      stabilityFrames: 10,
       holdMs: 1500,
       poseEmaAlpha: 0.35,
       burstMs: 500,
       profileYawMinDeg: 5,
       profilePitchTolDeg: 15,
-      frontYawTolDeg: 8,
-      frontPitchTolDeg: 10,
-      minFaceWidthRatio: 0.35,
-      maxFaceWidthRatio: 0.75,
+      frontYawTolDeg: 15,
+      frontPitchTolDeg: 17,
       // Target-oval geometry (normalized to canvas w/h) — the SAME numbers drive
       // both the drawn oval and the capture gate, so "fits the oval" is what
       // actually triggers a capture. Tune these to make the guide stricter/looser.
@@ -1002,7 +999,6 @@
             if (p.y < minY) minY = p.y;
             if (p.y > maxY) maxY = p.y;
           }
-          const faceWidthRatio = Math.max(0, maxX - minX);
           // Fit-to-oval: does the face bbox sit centred in and fill the target
           // oval? These numbers use the SAME cfg oval geometry as drawTargetOval,
           // so the drawn circle and the capture gate are one and the same.

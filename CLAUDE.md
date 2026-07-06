@@ -454,10 +454,13 @@ changes in `src/facetrack/components/face_capture/frontend/index.html` +
 
 ### Known follow-ups (not regressions)
 
-- Capture tuning constants (`cfg.ovalFillMin*`, `holdMs`, tolerances) live in
-  `index.html`'s `cfg` object; some Python-threaded values
-  (`minFaceWidthRatio`, `LIVE_CAPTURE_STABILITY_FRAMES`) are now unused after
-  the rework — safe to prune.
+- ~~Dead `stabilityStep` JS function + its tests, and the Python-threaded
+  `LIVE_CAPTURE_STABILITY_FRAMES` / `LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO` /
+  `LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO` config chain (config.py → app.py →
+  wrapper → index.html cfg) — unused after the fit-to-oval + time-hold
+  rework.~~ Pruned in the merge-readiness cleanup (2026-07-06); JS
+  `frontYawTolDeg`/`frontPitchTolDeg` defaults also corrected to 15/17 to
+  match the Python side.
 - `data/facetrack.db` on disk still has v1-scored visits (tagged
   scoring_version=1 by migration). Longitudinal charts do not yet draw a
   version-boundary annotation — worth adding before the CTO call.

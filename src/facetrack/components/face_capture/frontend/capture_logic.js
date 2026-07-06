@@ -26,16 +26,6 @@
     };
   }
 
-  // Symmetric stability accumulator with a lock latch. +1 per in-pose frame,
-  // -1 per out-of-pose frame, clamped to [0, framesNeeded]; latches locked
-  // once count reaches framesNeeded and stays locked until the caller resets.
-  function stabilityStep(state, inPose, framesNeeded) {
-    let count = state.count + (inPose ? 1 : -1);
-    if (count < 0) count = 0;
-    if (count > framesNeeded) count = framesNeeded;
-    return { count, locked: state.locked || count >= framesNeeded };
-  }
-
   // Variance of the discrete Laplacian over a grayscale buffer. Higher = sharper.
   function laplacianVariance(gray, width, height) {
     let sum = 0;
@@ -67,7 +57,6 @@
 
   global.CaptureLogic = {
     makePoseSmoother,
-    stabilityStep,
     laplacianVariance,
     pickSharpestFrame,
   };

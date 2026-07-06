@@ -60,7 +60,6 @@ _component_func = components.declare_component(
 def face_capture(
     *,
     key: str | None = None,
-    stability_frames: int = 10,
     hold_ms: int = 1500,
     profile_yaw_min_deg: float = 5.0,
     profile_pitch_tol_deg: float = 15.0,
@@ -68,8 +67,6 @@ def face_capture(
     front_pitch_tol_deg: float = 17.0,
     burst_ms: int = 500,
     pose_ema_alpha: float = 0.35,
-    min_face_width_ratio: float = 0.35,
-    max_face_width_ratio: float = 0.75,
     ghost_front: str | None = None,
     ghost_left: str | None = None,
     ghost_right: str | None = None,
@@ -79,10 +76,6 @@ def face_capture(
 
     Args:
         key: Streamlit widget key (must be stable across reruns).
-        stability_frames: How many consecutive in-pose frames before auto-capture.
-            (Legacy frame-count meter; the JS component's lock trigger now uses
-            ``hold_ms`` instead, but this is still threaded through for any
-            other consumer of the raw config.)
         hold_ms: Elapsed-time (ms) the pose must be held before auto-capture
             locks and the sharpest-frame burst begins. Frame-rate independent,
             unlike the old frame-count stability meter.
@@ -103,7 +96,6 @@ def face_capture(
         The capture payload, or None until the user clicks "完成".
     """
     return _component_func(
-        stabilityFrames=stability_frames,
         holdMs=hold_ms,
         profileYawMinDeg=profile_yaw_min_deg,
         profilePitchTolDeg=profile_pitch_tol_deg,
@@ -111,8 +103,6 @@ def face_capture(
         frontPitchTolDeg=front_pitch_tol_deg,
         burstMs=burst_ms,
         poseEmaAlpha=pose_ema_alpha,
-        minFaceWidthRatio=min_face_width_ratio,
-        maxFaceWidthRatio=max_face_width_ratio,
         ghostFront=ghost_front,
         ghostLeft=ghost_left,
         ghostRight=ghost_right,

@@ -114,7 +114,6 @@ PROFILE_YAW_MIN_DEG: float = 5.0
 # per real-device feedback (2026-07-06) — still tight enough to reject a
 # genuinely tilted/nodding pose.
 PROFILE_PITCH_TOLERANCE_DEG: float = 25.0
-LIVE_CAPTURE_STABILITY_FRAMES: int = 6
 
 # Elapsed-time hold before auto-capture locks (replaces the frame-count
 # stability meter, which was frame-rate dependent and felt instant on fast
@@ -128,10 +127,3 @@ LIVE_CAPTURE_HOLD_MS: int = 1500
 LIVE_CAPTURE_BURST_MS: int = 500
 # EMA smoothing factor for head-pose angles (higher = snappier, less smooth).
 LIVE_CAPTURE_POSE_EMA_ALPHA: float = 0.35
-
-# Face-distance gating. Computed in the JS component as the ratio of the face
-# bounding-box width to the frame width. Skin texture metrics (pore, wrinkle)
-# need ≥ ~35% face fill to be reliable; > 75% risks clipping the chin / ears
-# and confuses the alignment landmarks.
-LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO: float = 0.35
-LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO: float = 0.75

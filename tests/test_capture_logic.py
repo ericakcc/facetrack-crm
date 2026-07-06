@@ -39,25 +39,6 @@ def test_smoother_ema_dampens_jump(page):
     assert out["yaw"] == 5
 
 
-def test_stability_rises_and_locks(page):
-    locked = page.evaluate(
-        "() => { let st={count:0,locked:false};"
-        "for (let i=0;i<3;i++) st=CaptureLogic.stabilityStep(st,true,3);"
-        "return st.locked; }"
-    )
-    assert locked is True
-
-
-def test_stability_falls_symmetrically(page):
-    count = page.evaluate("() => CaptureLogic.stabilityStep({count:2,locked:false},false,5).count")
-    assert count == 1
-
-
-def test_stability_stays_locked_once_locked(page):
-    locked = page.evaluate("() => CaptureLogic.stabilityStep({count:0,locked:true},false,3).locked")
-    assert locked is True
-
-
 def test_pick_sharpest_prefers_in_tolerance(page):
     picked = page.evaluate(
         "() => CaptureLogic.pickSharpestFrame(["
@@ -103,17 +84,3 @@ def test_smoother_reset_restores_identity(page):
 def test_pick_sharpest_empty_returns_null(page):
     result = page.evaluate("() => CaptureLogic.pickSharpestFrame([])")
     assert result is None
-
-
-def test_stability_clamps_at_bounds(page):
-    hi = page.evaluate(
-        "() => { let st={count:0,locked:false};"
-        "for (let i=0;i<10;i++) st=CaptureLogic.stabilityStep(st,true,3);"
-        "return st.count; }"
-    )
-    lo = page.evaluate(
-        "() => { let st={count:1,locked:false};"
-        "for (let i=0;i<5;i++) st=CaptureLogic.stabilityStep(st,false,3);"
-        "return st.count; }"
-    )
-    assert hi == 3 and lo == 0

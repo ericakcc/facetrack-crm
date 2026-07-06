@@ -19,10 +19,7 @@ from facetrack.components.face_capture import face_capture
 from facetrack.config import (
     LIVE_CAPTURE_BURST_MS,
     LIVE_CAPTURE_HOLD_MS,
-    LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
-    LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
     LIVE_CAPTURE_POSE_EMA_ALPHA,
-    LIVE_CAPTURE_STABILITY_FRAMES,
     PHOTOS_DIR,
     POSE_TOLERANCE_DEG,
     PROFILE_PITCH_TOLERANCE_DEG,
@@ -712,7 +709,6 @@ def page_intake(patient: Patient) -> None:
         ghosts = get_ghost_photos(patient.id)
         capture_value = face_capture(
             key=f"face_capture_{patient.id}",
-            stability_frames=LIVE_CAPTURE_STABILITY_FRAMES,
             hold_ms=LIVE_CAPTURE_HOLD_MS,
             burst_ms=LIVE_CAPTURE_BURST_MS,
             pose_ema_alpha=LIVE_CAPTURE_POSE_EMA_ALPHA,
@@ -720,8 +716,6 @@ def page_intake(patient: Patient) -> None:
             profile_pitch_tol_deg=PROFILE_PITCH_TOLERANCE_DEG,
             front_yaw_tol_deg=POSE_TOLERANCE_DEG,
             front_pitch_tol_deg=POSE_TOLERANCE_DEG + 2.0,
-            min_face_width_ratio=LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
-            max_face_width_ratio=LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
             ghost_front=ghosts["front"],
             ghost_left=ghosts["left"],
             ghost_right=ghosts["right"],
