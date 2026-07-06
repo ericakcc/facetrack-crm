@@ -57,7 +57,7 @@ from facetrack.score_display import (
 )
 from facetrack.scoring import SCORING_VERSION, aggregate_face_scores, score_visit
 from facetrack.seed import seed_database
-from facetrack.visualization import compose_intake_view
+from facetrack.visualization import compose_intake_view, scoring_version_boundaries
 
 METRICS = ("pigmentation", "erythema", "wrinkle", "pore", "uniformity")
 METRIC_LABELS_ZH = {
@@ -238,11 +238,39 @@ def line_chart(visits: list[Visit], scores_by_visit: dict[int, dict[str, float]]
                 name=METRIC_LABELS_ZH[m],
             )
         )
+    # Mark scoring-formula version boundaries. A score step across this line may
+    # be an artefact of the formula change, not a real skin change — so it must
+    # be visually distinguishable in the trend. (Drawn as a separate shape +
+    # annotation rather than add_vline, whose annotation path does arithmetic on
+    # the x value and breaks on a temporal axis.)
+    boundaries = scoring_version_boundaries(visits)
+    for boundary_date, new_version in boundaries:
+        xd = boundary_date.isoformat()
+        fig.add_shape(
+            type="line",
+            x0=xd,
+            x1=xd,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="#f0a825", width=1.5, dash="dash"),
+        )
+        fig.add_annotation(
+            x=xd,
+            yref="paper",
+            y=1.0,
+            text=f"計分公式 v{new_version} 起",
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=11, color="#f0a825"),
+        )
     fig.update_layout(
         xaxis_title="就診日期",
         yaxis_title="膚況指數 (高 = 好)",
         yaxis=dict(range=[0, 10]),
-        margin=dict(t=10, b=40, l=40, r=10),
+        # Extra top room for the version-boundary label so it isn't clipped.
+        margin=dict(t=32 if boundaries else 10, b=40, l=40, r=10),
         height=360,
         legend=dict(orientation="h", y=-0.2),
     )
@@ -548,7 +576,13 @@ def page_overview(patient: Patient) -> None:
             st.plotly_chart(radar_chart(chart_visits, scores_by_visit), width="stretch")
         with col2:
             st.subheader("分數趨勢")
-            st.caption("時間序列追蹤每項指標的變化（膚況指數，高 = 好）。")
+            trend_caption = "時間序列追蹤每項指標的變化（膚況指數，高 = 好）。"
+            if scoring_version_boundaries(chart_visits):
+                trend_caption += (
+                    "　⚠️ **橘色虛線**為計分公式版本邊界：跨線的分數落差"
+                    "可能來自公式更新，未必是皮膚變化，請謹慎比較。"
+                )
+            st.caption(trend_caption)
             st.plotly_chart(line_chart(chart_visits, scores_by_visit), width="stretch")
 
     st.subheader("各回診詳細分數")
