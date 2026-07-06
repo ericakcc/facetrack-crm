@@ -358,7 +358,7 @@
     </div>
 
     <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
-    <div class="build-tag">build 2026-07-06 v15 · time-hold + manual shutter + off-canvas guidance</div>
+    <div class="build-tag">build 2026-07-06 v16 · manual shutter now enforces min face size</div>
   </div>
 
   <script src="capture_logic.js"></script>
@@ -479,6 +479,7 @@
     let lastInPose = false; // last computed in-pose state, drives the target oval colour
     let lastDetected = false; // last frame's face-detected state, drives the manual shutter button
     let lastPose = { yaw: 0, pitch: 0, roll: 0 }; // last smoothed pose, used by the manual shutter
+    let lastFaceWidthRatio = 0; // last measured face-width fraction, so the manual shutter can enforce distance
 
     // Grayscale a downscaled center crop of the current video frame and return
     // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
@@ -993,6 +994,7 @@
             if (p.x > maxX) maxX = p.x;
           }
           const faceWidthRatio = Math.max(0, maxX - minX);
+          lastFaceWidthRatio = faceWidthRatio;
 
           const mat =
             result.facialTransformationMatrixes &&
@@ -1185,6 +1187,18 @@
       // auto-captured frame.
       const mode = currentMode();
       if (!mode || !lastDetected) return;
+      // The escape hatch bypasses angle/pose gating (its whole purpose), but
+      // distance is NOT bypassable — a too-small face yields garbage skin data.
+      if (lastFaceWidthRatio < cfg.minFaceWidthRatio) {
+        instructionEl.textContent =
+          "📍 太遠了！臉太小無法拍攝，請靠近鏡頭一點（臉佔畫面要 ≥ " +
+          Math.round(cfg.minFaceWidthRatio * 100) + "%）";
+        return;
+      }
+      if (lastFaceWidthRatio > cfg.maxFaceWidthRatio) {
+        instructionEl.textContent = "📍 太近了！請稍微後退再拍";
+        return;
+      }
       const jpeg = captureJpeg();
       captures[mode] = {
         jpeg_b64: jpeg,
