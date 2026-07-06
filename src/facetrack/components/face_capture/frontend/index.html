@@ -113,6 +113,28 @@
     .pose-readout .val { color: var(--text); }
     .pose-readout .val.ok { color: var(--green); }
     .pose-readout .val.bad { color: var(--red); }
+    .pose-readout-adv summary {
+      cursor: pointer;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 11px;
+      color: var(--muted);
+      background: rgba(10, 10, 18, 0.7);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      list-style: none;
+      user-select: none;
+    }
+    .pose-readout-adv summary::-webkit-details-marker { display: none; }
+    .pose-readout-adv[open] summary {
+      border-radius: 6px 6px 0 0;
+      border-bottom: none;
+    }
+    .pose-readout-adv[open] .pose-readout {
+      border-radius: 0 0 6px 6px;
+      border-top: none;
+    }
     .hud-bottom {
       display: flex;
       flex-direction: column;
@@ -129,50 +151,6 @@
     .progress-ring.in-pose .arc {
       stroke: var(--green);
       filter: drop-shadow(0 0 8px rgba(74, 222, 128, 0.7));
-    }
-    /* Big centred countdown number displayed inside the stage between the
-       moment a stable pose is detected and the moment the JPEG is captured.
-       Goes 3 → 2 → 1 → 📸 with a pulse per tick. */
-    .countdown-overlay {
-      position: absolute;
-      inset: 0;
-      z-index: 4;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-      background: radial-gradient(circle at center,
-                                  rgba(0, 240, 255, 0.08) 0%,
-                                  transparent 60%);
-    }
-    .countdown-overlay.active { display: flex; }
-    .countdown-number {
-      font-family: ui-monospace, "SF Mono", monospace;
-      font-weight: 900;
-      font-size: 180px;
-      line-height: 1;
-      color: var(--green);
-      text-shadow: 0 0 24px rgba(74, 222, 128, 0.85),
-                   0 0 64px rgba(74, 222, 128, 0.45);
-      animation: countdownPulse 0.9s cubic-bezier(0.2, 0.7, 0.3, 1);
-    }
-    .countdown-number.flash {
-      color: #ffffff;
-      font-size: 110px;
-      text-shadow: 0 0 36px rgba(255, 255, 255, 0.95),
-                   0 0 96px rgba(0, 240, 255, 0.6);
-      animation: countdownFlash 0.45s ease-out;
-    }
-    @keyframes countdownPulse {
-      0%   { transform: scale(0.4); opacity: 0; }
-      18%  { transform: scale(1.25); opacity: 1; }
-      45%  { transform: scale(1.00); opacity: 1; }
-      100% { transform: scale(0.92); opacity: 0.85; }
-    }
-    @keyframes countdownFlash {
-      0%   { transform: scale(0.7); opacity: 0; }
-      30%  { transform: scale(1.4); opacity: 1; }
-      100% { transform: scale(1.0); opacity: 0.95; }
     }
     .instruction {
       background: rgba(10, 10, 18, 0.85);
@@ -330,18 +308,18 @@
     <div class="stage">
       <video id="cam" playsinline autoplay muted></video>
       <canvas id="overlay"></canvas>
-      <div id="countdownOverlay" class="countdown-overlay">
-        <div id="countdownNumber" class="countdown-number">3</div>
-      </div>
       <div class="hud">
         <div class="hud-top">
           <div id="modeBadge" class="mode-badge">⏳ 初始化…</div>
-          <div class="pose-readout">
-            <span class="lbl">yaw</span>  <span id="yawVal" class="val">—</span><br />
-            <span class="lbl">pitch</span><span id="pitchVal" class="val">—</span><br />
-            <span class="lbl">roll</span> <span id="rollVal" class="val">—</span><br />
-            <span class="lbl">size</span> <span id="sizeVal" class="val">—</span>
-          </div>
+          <details class="pose-readout-adv">
+            <summary>進階</summary>
+            <div class="pose-readout">
+              <span class="lbl">yaw</span>  <span id="yawVal" class="val">—</span><br />
+              <span class="lbl">pitch</span><span id="pitchVal" class="val">—</span><br />
+              <span class="lbl">roll</span> <span id="rollVal" class="val">—</span><br />
+              <span class="lbl">size</span> <span id="sizeVal" class="val">—</span>
+            </div>
+          </details>
         </div>
         <div class="hud-bottom">
           <svg id="progRing" class="progress-ring" viewBox="0 0 56 56">
@@ -374,13 +352,16 @@
     <div class="actions">
       <button id="retakeBtn" disabled>重拍當前</button>
       <button id="resetBtn">全部重來</button>
+      <button id="shutterBtn" disabled>📸 手動拍攝</button>
+      <button id="ghostBtn">👻 疊圖：關</button>
       <button id="finishBtn" class="primary" disabled>✓ 完成（送回 Python）</button>
     </div>
 
     <div id="statusLine" class="status-line">MediaPipe Tasks Vision · 478 landmarks · GPU 加速</div>
-    <div class="build-tag">build 2026-05-18T21:55 v13 · sharpness on face crop, JPEG q=0.95</div>
+    <div class="build-tag">build 2026-07-06 v18 · per-mode fill (side stricter)</div>
   </div>
 
+  <script src="capture_logic.js"></script>
   <script type="module">
     // -------- Streamlit message bridge -----------------------------------
     function sendToStreamlit(type, payload = {}) {
@@ -401,15 +382,31 @@
 
     // -------- Defaults (overridden by Python via streamlit:render) -------
     const cfg = {
-      stabilityFrames: 10,
-      countdownMs: 3000,
+      holdMs: 1500,
+      poseEmaAlpha: 0.35,
+      burstMs: 500,
       profileYawMinDeg: 5,
       profilePitchTolDeg: 15,
-      frontYawTolDeg: 8,
-      frontPitchTolDeg: 10,
-      minFaceWidthRatio: 0.35,
-      maxFaceWidthRatio: 0.75,
+      frontYawTolDeg: 15,
+      frontPitchTolDeg: 17,
+      // Target-oval geometry (normalized to canvas w/h) — the SAME numbers drive
+      // both the drawn oval and the capture gate, so "fits the oval" is what
+      // actually triggers a capture. Tune these to make the guide stricter/looser.
+      ovalCY: 0.46, ovalRX: 0.22, ovalRY: 0.32,
+      ovalCenterTolX: 0.12, ovalCenterTolY: 0.14, // how far off-centre is still OK
+      ovalFillMin: 0.72, ovalFillMax: 1.05,        // front: face height / oval height band
+      ovalFillMinProfile: 0.82,                    // side needs to fill more (closer) for cheek detail
     };
+
+    // -------- Ghost overlay (prior-visit photo faintly under the preview) --
+    const ghostImgs = { front: null, left: null, right: null };
+    let ghostOn = false; // opt-in: prior-visit framing often differs, so off by default
+    function loadGhost(dataUrl) {
+      if (!dataUrl) return null;
+      const img = new Image();
+      img.src = dataUrl;
+      return img;
+    }
 
     window.addEventListener("message", (event) => {
       const data = event.data;
@@ -418,6 +415,9 @@
       for (const k of Object.keys(cfg)) {
         if (typeof args[k] === "number") cfg[k] = args[k];
       }
+      ghostImgs.front = loadGhost(args.ghostFront);
+      ghostImgs.left = loadGhost(args.ghostLeft);
+      ghostImgs.right = loadGhost(args.ghostRight);
       if (typeof args.height === "number") setFrameHeight(args.height);
     });
 
@@ -438,6 +438,7 @@
     const progArc = document.getElementById("progArc");
     const retakeBtn = document.getElementById("retakeBtn");
     const resetBtn = document.getElementById("resetBtn");
+    const shutterBtn = document.getElementById("shutterBtn");
     const finishBtn = document.getElementById("finishBtn");
     const errorBanner = document.getElementById("errorBanner");
     const statusLine = document.getElementById("statusLine");
@@ -465,7 +466,7 @@
     const SEQUENCE = ["front", "left", "right"];
     const MODE_LABELS = { front: "正臉", left: "左側臉", right: "右側臉" };
     const INSTRUCTIONS = {
-      front: "請正對鏡頭、視線平視，鎖定後會倒數 3 秒拍照…",
+      front: "請正對鏡頭、視線平視，姿勢保持穩定即自動擷取…",
       left: "請輕微將頭轉向您的左邊（yaw < -5° 即可鎖定，只需露出左頰膚質）…",
       right: "請輕微將頭轉向您的右邊（yaw > +5° 即可鎖定，只需露出右頰膚質）…",
     };
@@ -473,32 +474,36 @@
     // -------- State ------------------------------------------------------
     let faceLandmarker = null;
     let FaceLandmarkerCls = null;
-    let lockedAt = null;            // ms timestamp when pose locked (= countdown start)
-    let lastCountdownSecond = null; // tick tracker so we only re-animate on second changes
-    const countdownOverlay = document.getElementById("countdownOverlay");
-    const countdownNumberEl = document.getElementById("countdownNumber");
-
-    function showCountdown(secondsRemaining) {
-      countdownOverlay.classList.add("active");
-      const label = secondsRemaining <= 0 ? "📸" : String(secondsRemaining);
-      if (lastCountdownSecond === secondsRemaining) return;
-      lastCountdownSecond = secondsRemaining;
-      countdownNumberEl.textContent = label;
-      countdownNumberEl.classList.toggle("flash", secondsRemaining <= 0);
-      // Force animation restart.
-      countdownNumberEl.style.animation = "none";
-      void countdownNumberEl.offsetWidth;
-      countdownNumberEl.style.animation = "";
-    }
-
-    function hideCountdown() {
-      countdownOverlay.classList.remove("active");
-      lastCountdownSecond = null;
-    }
     let captures = { front: null, left: null, right: null };
     let currentIdx = 0;
-    let stableCount = 0;
+    let poseSmoother = CaptureLogic.makePoseSmoother(cfg.poseEmaAlpha);
+    let heldSince = null; // performance.now() when inPose last became true; null = not holding
+    let burst = null; // {startedAt, frames:[]} while CAPTURING
     let running = false;
+    let lastInPose = false; // last computed in-pose state, drives the target oval colour
+    let lastDetected = false; // last frame's face-detected state, drives the manual shutter button
+    let lastPose = { yaw: 0, pitch: 0, roll: 0 }; // last smoothed pose, used by the manual shutter
+    let lastFillFrac = 0;     // last face-height / oval-height fill fraction (manual shutter distance guard)
+
+    // Grayscale a downscaled center crop of the current video frame and return
+    // its Laplacian variance (sharpness). Small crop keeps this cheap enough to
+    // run per burst frame.
+    const sharpCanvas = document.createElement("canvas");
+    sharpCanvas.width = 128;
+    sharpCanvas.height = 128;
+    const sharpCtx = sharpCanvas.getContext("2d", { willReadFrequently: true });
+    function frameSharpness() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const side = Math.min(vw, vh);
+      const sx = (vw - side) / 2, sy = (vh - side) / 2;
+      sharpCtx.drawImage(video, sx, sy, side, side, 0, 0, 128, 128);
+      const { data } = sharpCtx.getImageData(0, 0, 128, 128);
+      const gray = new Uint8Array(128 * 128);
+      for (let i = 0, g = 0; i < data.length; i += 4, g++) {
+        gray[g] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+      }
+      return CaptureLogic.laplacianVariance(gray, 128, 128);
+    }
 
     function currentMode() {
       return SEQUENCE[currentIdx] || null;
@@ -943,11 +948,35 @@
       ctx.shadowBlur = 0;
     }
 
+    function drawTargetOval(inPose) {
+      const cx = canvas.width * 0.5, cy = canvas.height * cfg.ovalCY;
+      const rx = canvas.width * cfg.ovalRX, ry = canvas.height * cfg.ovalRY;
+      ctx.save();
+      ctx.lineWidth = 4;
+      ctx.setLineDash([12, 10]);
+      ctx.strokeStyle = inPose ? "#37d67a" : "#f0a825";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     function loop() {
       if (!running) return;
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const gm = currentMode();
+      const ghost = gm ? ghostImgs[gm] : null;
+      if (ghostOn && ghost && ghost.complete && ghost.naturalWidth > 0) {
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        ctx.drawImage(ghost, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
+
+      drawTargetOval(lastInPose);
 
       let detected = false;
       if (faceLandmarker && video.readyState >= 2) {
@@ -961,24 +990,42 @@
           // Face-frame size ratio: how much of the frame width the face fills.
           // Used as a distance proxy — too small = blurry skin texture; too big
           // = chin/ears clipped, alignment landmarks unreliable.
-          let minX = 1, maxX = 0;
+          let minX = 1, maxX = 0, minY = 1, maxY = 0;
           for (let i = 0; i < landmarks.length; i++) {
             const p = landmarks[i];
             if (!p) continue;
             if (p.x < minX) minX = p.x;
             if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
           }
-          const faceWidthRatio = Math.max(0, maxX - minX);
+          // Fit-to-oval: does the face bbox sit centred in and fill the target
+          // oval? These numbers use the SAME cfg oval geometry as drawTargetOval,
+          // so the drawn circle and the capture gate are one and the same.
+          const faceCX = (minX + maxX) / 2, faceCY = (minY + maxY) / 2;
+          const fillFrac = (maxY - minY) / (2 * cfg.ovalRY);
+          const _fitMode = currentMode();
+          const fillMin = (_fitMode === "left" || _fitMode === "right")
+            ? cfg.ovalFillMinProfile : cfg.ovalFillMin;
+          const offCentre =
+            Math.abs(faceCX - 0.5) > cfg.ovalCenterTolX ||
+            Math.abs(faceCY - cfg.ovalCY) > cfg.ovalCenterTolY;
+          const tooFar = fillFrac < fillMin;
+          const tooClose = fillFrac > cfg.ovalFillMax;
+          const fitsOval = !offCentre && !tooFar && !tooClose;
+          lastFillFrac = fillFrac;
 
           const mat =
             result.facialTransformationMatrixes &&
             result.facialTransformationMatrixes[0];
           if (mat && mat.data) {
-            const { yaw, pitch, roll } = eulerFromMatrix(mat.data);
+            let { yaw, pitch, roll } = eulerFromMatrix(mat.data);
+            const sm = poseSmoother.update({ yaw, pitch, roll });
+            yaw = sm.yaw; pitch = sm.pitch; roll = sm.roll;
             yawValEl.textContent = yaw.toFixed(1) + "°";
             pitchValEl.textContent = pitch.toFixed(1) + "°";
             rollValEl.textContent = roll.toFixed(1) + "°";
-            sizeValEl.textContent = (faceWidthRatio * 100).toFixed(0) + "%";
+            sizeValEl.textContent = "填 " + (fillFrac * 100).toFixed(0) + "%";
 
             const mode = currentMode();
             if (mode && !captures[mode]) {
@@ -988,80 +1035,79 @@
                                    yaw >= cfg.profileYawMinDeg;
               const pitchTol = mode === "front" ? cfg.frontPitchTolDeg : cfg.profilePitchTolDeg;
               const pitchOk = Math.abs(pitch) <= pitchTol;
-              const tooFar = faceWidthRatio < cfg.minFaceWidthRatio;
-              const tooClose = faceWidthRatio > cfg.maxFaceWidthRatio;
-              const distanceOk = !tooFar && !tooClose;
               yawValEl.className = "val " + (yawOk ? "ok" : "bad");
               pitchValEl.className = "val " + (pitchOk ? "ok" : "bad");
-              sizeValEl.className = "val " + (distanceOk ? "ok" : "bad");
+              sizeValEl.className = "val " + (fitsOval ? "ok" : "bad");
               rollValEl.className = "val";
 
-              // Dynamic instruction priority: lock > distance > orientation.
-              if (lockedAt === null) {
-                if (yawOk && pitchOk && tooFar) {
-                  instructionEl.textContent =
-                    "📍 太遠了！請靠近鏡頭一點（臉佔畫面要 ≥ " +
-                    Math.round(cfg.minFaceWidthRatio * 100) + "%）";
-                } else if (yawOk && pitchOk && tooClose) {
-                  instructionEl.textContent =
-                    "📍 太近了！請稍微後退（避免下巴/耳朵超出畫面）";
-                } else {
-                  instructionEl.textContent = INSTRUCTIONS[mode];
-                }
-              }
+              const inPose = yawOk && pitchOk && fitsOval;
+              lastInPose = inPose;
+              lastPose = { yaw, pitch, roll };
 
-              const inPose = yawOk && pitchOk && distanceOk;
               if (inPose) {
-                stableCount = Math.min(stableCount + 1, cfg.stabilityFrames);
-                modeBadge.classList.add("in-pose");
-                progRing.classList.add("in-pose");
+                if (heldSince === null) heldSince = performance.now();
               } else {
-                stableCount = Math.max(stableCount - 2, 0);
-                modeBadge.classList.remove("in-pose");
-                progRing.classList.remove("in-pose");
+                heldSince = null;
+                burst = null;
               }
-              const progress = stableCount / cfg.stabilityFrames;
-              progArc.setAttribute(
-                "stroke-dashoffset",
-                String(ARC_LEN * (1 - progress))
-              );
 
-              if (lockedAt === null) {
-                // SEEKING — fill the progress ring until a stable pose is held
-                // long enough to commit, then enter the COUNTDOWN phase.
-                if (stableCount >= cfg.stabilityFrames) {
-                  lockedAt = performance.now();
-                  instructionEl.textContent = "🎯 鎖定！請保持姿勢…";
-                  logStep(`pose locked (${mode}) — countdown begin`, "ok");
+              // Instruction priority: distance blocker > orientation guidance >
+              // "hold steady" while the timer fills. All of this drives the
+              // unmirrored HTML #instruction element — never drawn onto the
+              // mirrored <canvas>, so left/right hints always read correctly.
+              if (burst === null) {
+                if (offCentre) {
+                  instructionEl.textContent = "⭕ 請把臉移到圓圈中央";
+                } else if (tooFar) {
+                  instructionEl.textContent = "📍 請靠近一點，讓臉填滿圓圈";
+                } else if (tooClose) {
+                  instructionEl.textContent = "📍 太近了！請稍微後退";
+                } else if (mode === "front") {
+                  instructionEl.textContent = (yawOk && pitchOk) ? "保持住…" : "請正對鏡頭";
+                } else if (!yawOk) {
+                  instructionEl.textContent = mode === "left"
+                    ? "👈 請把頭輕輕轉向你的左邊"
+                    : "👉 請把頭輕輕轉向你的右邊";
+                } else {
+                  instructionEl.textContent = "角度可以了，保持住…";
                 }
-              } else {
-                // COUNTDOWN — render the big number; capture when it expires.
-                // Brief out-of-pose wobble does NOT cancel: by this point the
-                // user has already been told to hold still, and cancelling on
-                // every micro-movement is worse UX than capturing a slightly
-                // wobbly frame (ConsistencyGate will catch genuinely-bad ones
-                // on the Python side anyway).
-                const elapsed = performance.now() - lockedAt;
-                const remaining = cfg.countdownMs - elapsed;
-                if (remaining <= 0) {
-                  showCountdown(0);  // flash 📸 once before clearing
-                  const b64 = captureJpeg();
+              }
+
+              modeBadge.classList.toggle("in-pose", inPose);
+              progRing.classList.toggle("in-pose", inPose);
+              const progress = heldSince
+                ? Math.min(1, (performance.now() - heldSince) / cfg.holdMs)
+                : 0;
+              progArc.setAttribute("stroke-dashoffset", String(ARC_LEN * (1 - progress)));
+
+              if (progress >= 1 && burst === null) {
+                // Enter CAPTURING: open a short burst window.
+                burst = { startedAt: performance.now(), frames: [] };
+                instructionEl.textContent = "📸 擷取中…";
+                logStep(`pose held ${cfg.holdMs}ms (${mode}) — burst begin`, "ok");
+              }
+
+              if (burst !== null) {
+                burst.frames.push({
+                  jpeg: captureJpeg(),
+                  score: frameSharpness(),
+                  inTolerance: inPose,
+                  yaw, pitch, roll,
+                });
+                if (performance.now() - burst.startedAt >= cfg.burstMs) {
+                  const best = CaptureLogic.pickSharpestFrame(burst.frames);
                   captures[mode] = {
-                    jpeg_b64: b64,
-                    yaw,
-                    pitch,
-                    roll,
+                    jpeg_b64: best.jpeg,
+                    yaw: best.yaw, pitch: best.pitch, roll: best.roll,
                     captured_at: new Date().toISOString(),
                   };
-                  setThumb(mode, b64);
-                  stableCount = 0;
-                  lockedAt = null;
+                  setThumb(mode, best.jpeg);
+                  burst = null;
+                  heldSince = null;
+                  poseSmoother.reset();
                   progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
                   currentIdx += 1;
                   updateUI();
-                  setTimeout(hideCountdown, 350);
-                } else {
-                  showCountdown(Math.ceil(remaining / 1000));
                 }
               }
             }
@@ -1077,44 +1123,43 @@
         yawValEl.className = "val";
         pitchValEl.className = "val";
         sizeValEl.className = "val";
-        if (lockedAt === null) {
-          // Only erode the seeking ring when we haven't already committed.
-          stableCount = Math.max(stableCount - 2, 0);
-          progArc.setAttribute(
-            "stroke-dashoffset",
-            String(ARC_LEN * (1 - stableCount / cfg.stabilityFrames))
-          );
+        lastInPose = false;
+        if (burst === null) {
+          // No face at all and no burst running — nothing is held.
+          heldSince = null;
+          progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
           modeBadge.classList.remove("in-pose");
           progRing.classList.remove("in-pose");
         } else {
-          // We're mid-countdown but the face dropped out (eg. turned too far
-          // for MediaPipe on a side profile). Keep counting down so the user
-          // doesn't have to start over; tick the visible number too.
+          // We're mid-burst but the face dropped out entirely (eg. turned too
+          // far for MediaPipe on a side profile, or a momentary occlusion).
+          // Keep the burst window running on wall-clock time so the user
+          // doesn't have to start over; finalize using whichever frames were
+          // captured while the face WAS detected.
           const mode = currentMode();
-          if (mode && !captures[mode]) {
-            const remaining = cfg.countdownMs - (performance.now() - lockedAt);
-            if (remaining <= 0) {
-              showCountdown(0);
-              const b64 = captureJpeg();
-              captures[mode] = {
-                jpeg_b64: b64,
-                yaw: 0, pitch: 0, roll: 0,
-                captured_at: new Date().toISOString(),
-                face_lost_at_capture: true,
-              };
-              setThumb(mode, b64);
-              stableCount = 0;
-              lockedAt = null;
-              progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
-              currentIdx += 1;
-              updateUI();
-              setTimeout(hideCountdown, 350);
-            } else {
-              showCountdown(Math.ceil(remaining / 1000));
-            }
+          if (mode && !captures[mode] && performance.now() - burst.startedAt >= cfg.burstMs) {
+            const best = CaptureLogic.pickSharpestFrame(burst.frames) || {
+              jpeg: captureJpeg(), yaw: 0, pitch: 0, roll: 0,
+            };
+            captures[mode] = {
+              jpeg_b64: best.jpeg,
+              yaw: best.yaw, pitch: best.pitch, roll: best.roll,
+              captured_at: new Date().toISOString(),
+              face_lost_at_capture: true,
+            };
+            setThumb(mode, best.jpeg);
+            burst = null;
+            heldSince = null;
+            poseSmoother.reset();
+            progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+            currentIdx += 1;
+            updateUI();
           }
         }
       }
+
+      lastDetected = detected;
+      shutterBtn.disabled = !lastDetected || !currentMode();
 
       ctx.restore();
       requestAnimationFrame(loop);
@@ -1132,9 +1177,9 @@
       captures[target] = null;
       clearThumb(target);
       currentIdx = SEQUENCE.indexOf(target);
-      stableCount = 0;
-      lockedAt = null;
-      hideCountdown();
+      heldSince = null;
+      burst = null;
+      poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
       updateUI();
     });
@@ -1143,11 +1188,49 @@
       captures = { front: null, left: null, right: null };
       for (const m of SEQUENCE) clearThumb(m);
       currentIdx = 0;
-      stableCount = 0;
-      lockedAt = null;
-      hideCountdown();
+      heldSince = null;
+      burst = null;
+      poseSmoother.reset();
       progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
       updateUI();
+    });
+
+    shutterBtn.addEventListener("click", () => {
+      // Escape hatch: bypass the auto-gate entirely and capture the current
+      // frame for whatever mode is active, as long as a face is detected.
+      // Reuses captureJpeg() so the payload shape is identical to an
+      // auto-captured frame.
+      const mode = currentMode();
+      if (!mode || !lastDetected) return;
+      // The escape hatch bypasses angle/pose gating (its whole purpose), but
+      // distance is NOT bypassable — a too-small face yields garbage skin data.
+      if (lastFillFrac < cfg.ovalFillMin) {
+        instructionEl.textContent = "📍 臉太小無法拍攝，請靠近一點讓臉填滿圓圈";
+        return;
+      }
+      if (lastFillFrac > cfg.ovalFillMax) {
+        instructionEl.textContent = "📍 太近了！請稍微後退再拍";
+        return;
+      }
+      const jpeg = captureJpeg();
+      captures[mode] = {
+        jpeg_b64: jpeg,
+        yaw: lastPose.yaw, pitch: lastPose.pitch, roll: lastPose.roll,
+        captured_at: new Date().toISOString(),
+      };
+      setThumb(mode, jpeg);
+      burst = null;
+      heldSince = null;
+      poseSmoother.reset();
+      progArc.setAttribute("stroke-dashoffset", String(ARC_LEN));
+      currentIdx += 1;
+      logStep(`manual shutter (${mode})`, "ok");
+      updateUI();
+    });
+
+    document.getElementById("ghostBtn").addEventListener("click", () => {
+      ghostOn = !ghostOn;
+      document.getElementById("ghostBtn").textContent = ghostOn ? "👻 疊圖：開" : "👻 疊圖：關";
     });
 
     finishBtn.addEventListener("click", () => {

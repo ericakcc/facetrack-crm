@@ -6,10 +6,12 @@ match what the scoring engine would internally compute. No GUI assertions.
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pytest
 
-from facetrack.db import Region
+from facetrack.db import Region, Visit
 from facetrack.visualization import (
     _RESPONSE_FUNCS,
     compose_intake_view,
@@ -20,6 +22,7 @@ from facetrack.visualization import (
     metric_response_map,
     overlay_heatmap,
     polygon_mask,
+    scoring_version_boundaries,
     skin_mask_from_landmarks,
 )
 
@@ -209,3 +212,32 @@ def test_compose_intake_view_no_heatmap_no_overlays() -> None:
         show_roi=False,
     )
     assert np.array_equal(out, image)
+
+
+# --------------------------- scoring-version boundaries ----------------------
+
+
+def _visit(day: int, version: int) -> Visit:
+    return Visit(id=day, patient_id=1, visit_date=date(2026, 1, day), scoring_version=version)
+
+
+def test_boundaries_empty_when_all_same_version():
+    visits = [_visit(1, 2), _visit(2, 2), _visit(3, 2)]
+    assert scoring_version_boundaries(visits) == []
+
+
+def test_boundaries_single_visit_has_none():
+    assert scoring_version_boundaries([_visit(1, 1)]) == []
+
+
+def test_boundaries_marks_v1_to_v2_transition_at_new_version_date():
+    visits = [_visit(1, 1), _visit(2, 1), _visit(3, 2), _visit(4, 2)]
+    assert scoring_version_boundaries(visits) == [(date(2026, 1, 3), 2)]
+
+
+def test_boundaries_reports_every_transition():
+    visits = [_visit(1, 1), _visit(2, 2), _visit(3, 2), _visit(4, 3)]
+    assert scoring_version_boundaries(visits) == [
+        (date(2026, 1, 2), 2),
+        (date(2026, 1, 4), 3),
+    ]

@@ -17,10 +17,9 @@ from sqlmodel import select
 
 from facetrack.components.face_capture import face_capture
 from facetrack.config import (
-    LIVE_CAPTURE_COUNTDOWN_MS,
-    LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
-    LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
-    LIVE_CAPTURE_STABILITY_FRAMES,
+    LIVE_CAPTURE_BURST_MS,
+    LIVE_CAPTURE_HOLD_MS,
+    LIVE_CAPTURE_POSE_EMA_ALPHA,
     PHOTOS_DIR,
     POSE_TOLERANCE_DEG,
     PROFILE_PITCH_TOLERANCE_DEG,
@@ -39,6 +38,7 @@ from facetrack.db import (
     get_session,
     init_db,
 )
+from facetrack.ghost_photos import get_ghost_photos
 from facetrack.llm_explainer import get_explainer
 from facetrack.patient_service import (
     create_patient,
@@ -57,7 +57,7 @@ from facetrack.score_display import (
 )
 from facetrack.scoring import SCORING_VERSION, aggregate_face_scores, score_visit
 from facetrack.seed import seed_database
-from facetrack.visualization import compose_intake_view
+from facetrack.visualization import compose_intake_view, scoring_version_boundaries
 
 METRICS = ("pigmentation", "erythema", "wrinkle", "pore", "uniformity")
 METRIC_LABELS_ZH = {
@@ -238,11 +238,39 @@ def line_chart(visits: list[Visit], scores_by_visit: dict[int, dict[str, float]]
                 name=METRIC_LABELS_ZH[m],
             )
         )
+    # Mark scoring-formula version boundaries. A score step across this line may
+    # be an artefact of the formula change, not a real skin change — so it must
+    # be visually distinguishable in the trend. (Drawn as a separate shape +
+    # annotation rather than add_vline, whose annotation path does arithmetic on
+    # the x value and breaks on a temporal axis.)
+    boundaries = scoring_version_boundaries(visits)
+    for boundary_date, new_version in boundaries:
+        xd = boundary_date.isoformat()
+        fig.add_shape(
+            type="line",
+            x0=xd,
+            x1=xd,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="#f0a825", width=1.5, dash="dash"),
+        )
+        fig.add_annotation(
+            x=xd,
+            yref="paper",
+            y=1.0,
+            text=f"計分公式 v{new_version} 起",
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=11, color="#f0a825"),
+        )
     fig.update_layout(
         xaxis_title="就診日期",
         yaxis_title="膚況指數 (高 = 好)",
         yaxis=dict(range=[0, 10]),
-        margin=dict(t=10, b=40, l=40, r=10),
+        # Extra top room for the version-boundary label so it isn't clipped.
+        margin=dict(t=32 if boundaries else 10, b=40, l=40, r=10),
         height=360,
         legend=dict(orientation="h", y=-0.2),
     )
@@ -548,7 +576,13 @@ def page_overview(patient: Patient) -> None:
             st.plotly_chart(radar_chart(chart_visits, scores_by_visit), width="stretch")
         with col2:
             st.subheader("分數趨勢")
-            st.caption("時間序列追蹤每項指標的變化（膚況指數，高 = 好）。")
+            trend_caption = "時間序列追蹤每項指標的變化（膚況指數，高 = 好）。"
+            if scoring_version_boundaries(chart_visits):
+                trend_caption += (
+                    "　⚠️ **橘色虛線**為計分公式版本邊界：跨線的分數落差"
+                    "可能來自公式更新，未必是皮膚變化，請謹慎比較。"
+                )
+            st.caption(trend_caption)
             st.plotly_chart(line_chart(chart_visits, scores_by_visit), width="stretch")
 
     st.subheader("各回診詳細分數")
@@ -703,19 +737,22 @@ def page_intake(patient: Patient) -> None:
 
     with source_tabs[0]:
         st.markdown(
-            "**操作流程**：對著鏡頭 → 系統偵測到正臉、鎖定後倒數 3 秒自動拍照 → 按下「✓ 完成」送回。"
+            "**操作流程**：對著鏡頭 → 系統偵測到正臉、姿勢保持穩定後自動擷取最清晰的畫面 → 按下「✓ 完成」送回。"
             "拍完正臉後若想多留一張側臉膚質紀錄，可繼續轉頭；不想拍直接按「完成」即可。"
         )
+        ghosts = get_ghost_photos(patient.id)
         capture_value = face_capture(
             key=f"face_capture_{patient.id}",
-            stability_frames=LIVE_CAPTURE_STABILITY_FRAMES,
-            countdown_ms=LIVE_CAPTURE_COUNTDOWN_MS,
+            hold_ms=LIVE_CAPTURE_HOLD_MS,
+            burst_ms=LIVE_CAPTURE_BURST_MS,
+            pose_ema_alpha=LIVE_CAPTURE_POSE_EMA_ALPHA,
             profile_yaw_min_deg=PROFILE_YAW_MIN_DEG,
             profile_pitch_tol_deg=PROFILE_PITCH_TOLERANCE_DEG,
             front_yaw_tol_deg=POSE_TOLERANCE_DEG,
             front_pitch_tol_deg=POSE_TOLERANCE_DEG + 2.0,
-            min_face_width_ratio=LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO,
-            max_face_width_ratio=LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO,
+            ghost_front=ghosts["front"],
+            ghost_left=ghosts["left"],
+            ghost_right=ghosts["right"],
         )
         if capture_value:
             front_image_bgr = _decode_b64_jpeg(capture_value["front"]["jpeg_b64"])

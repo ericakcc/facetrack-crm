@@ -20,12 +20,21 @@
   - **驗證骨架轉正為迴歸網**:新增 `tests/test_validation_benchmarks.py`(5 個 opt-in 測試,`pytest -m validation`,~70s,需本機資料);pyproject `addopts` 預設 `-m 'not validation'` 排除,fixtures 在資料缺失時一律 **skip**(不 fail、不 error)。
   - **文件全面重新對齊**:新增 `docs/VALIDATION.md`(3 項 ground-truth 發現的彙總證據,CTO/panel 用);可重現性數字更新為 **σ̄ 0.173 vs 基線 0.686**(~4×),其中皺紋 σ=0.091 部分是 p95 天花板夾制而非純粹穩健性——誠實揭露寫在 `BUILD_NOTES.md` §4;CLAUDE.md / README / TDD 測試數字同步為 **97 tests / 10 files(92 fast + 5 opt-in)**。
 
+- **Session 7**(2026-07-06)分兩條分支,皆已 commit、**尚未 push**:
+  - **`feat/face-capture-ux`(20 commits,6445b34)——實況拍攝體驗全面重做**(起因:Eric 實機測試回饋體驗差):**對進橢圓即判斷**(橢圓就是拍照條件:置中+填滿;側臉填滿門檻 0.82 > 正臉 0.72)、**1.5 秒時間制持住**(取代 3 秒倒數)、**手動快門逃生口**(仍強制最小臉部大小)、引導文字移出鏡像畫布(修左右相反)、ghost 疊圖預設關。純邏輯 `capture_logic.js`(Playwright 測)。最終整支審查(opus)= Ready with fixes,死參數/假測試已清。研究文件:`CAPTURE_STABILITY_RESEARCH.md`、`NATIVE_AR_CAPTURE_EVALUATION.md`(結論:留網頁)。
+  - **`feat/trend-scoring-version`(+1 commit,9f146b6)——縱向趨勢圖 scoring_version 邊界標註**:相鄰就診計分版本改變處畫橘色虛線 + 「計分公式 vN 起」標籤 + 警語 caption,避免 v1/v2 分數落差被誤讀成皮膚變化。邊界偵測抽成純函式 `visualization.scoring_version_boundaries`(4 個單元測試)。
+
 ### ⚠️ 目前資料 / 狀態
-- Session 4 + 5 + 6 皆已 commit(見 `git log`);working tree 乾淨。
-- Streamlit Cloud 線上版仍是 v1,需**重新部署**才會吃到 v2 + 重校後的 wrinkle range。
-- 現行數字(取代所有舊值):**97 tests / 10 files**(92 fast + 5 opt-in 真實資料 benchmark,`uv run pytest -m validation`)、延遲 **21.6ms p50**、可重現性 **σ̄ 0.173 vs 基線 0.686(~4×)**。臨床準確度有外部 ground-truth 佐證(見 `docs/VALIDATION.md`;仍非院內儀器對照)。
+- Session 7 兩條分支 merge-ready 但**尚未 push**(依全域規則由 Eric 手動 push);拍照體驗經 Eric 網路攝影機驗過並核准。
+- Streamlit Cloud 線上版仍是 v1,需**重新部署**才會吃到 v2 scoring + 這次 capture 大改 + 趨勢標註。
+- 現行數字:**113 fast tests**(+4 邊界測試,capture rework 清掉 5 個死測試)+ 5 opt-in 驗證 benchmark;可重現性 **σ̄ 0.173 vs 基線 0.686**;臨床準確度有外部 ground-truth 佐證(`docs/VALIDATION.md`)。
 
 ### ❌ 試過但放棄的路(及原因)
+- **(S7) 把文字畫在自拍鏡像畫布上**:畫布有 `scaleX(-1)`,文字左右相反。引導文字一律放不鏡像的 HTML 圖層。
+- **(S7) 幀數制穩定計數 / 橢圓只當裝飾**:前者體感隨電腦快慢(太快)→ 改時間制;後者臉沒對進圈也拍 → 改成橢圓即判斷。
+- **(S7) 期待換掉 MediaPipe 解決側臉**:瀏覽器替代品(TF.js)同模型、face-api.js 更差;大角度 landmark 退化是單鏡頭 2D 通病;真正升級只有原生 iOS+TrueDepth(ARCore 也單鏡頭)。
+- **(S7) 長命 Streamlit + 一直改檔** → SQLModel「Table already defined」(熱重載重複註冊 metadata);`git reset --hard` 也會洗掉未提交的 PROGRESS.md。改 `.py` 後重啟進程;進度文件改完盡快 commit。
+- **(S7) plotly `add_vline` 帶 annotation 用在日期軸**:內部對 x 做算術會爆(`sum(str)`)。改用 `add_shape`(線)+ `add_annotation`(標籤)分開畫。
 - **驗證用整臉 `wrinkle_raw`**:ρ 僅 0.06–0.15,被眼/眉/髮際邊緣污染。改限定 production 皮膚 ROI 後 ρ 跳到 0.42。
 - **驗證時跳過 CLAHE**:給出錯誤範圍 [0.05, 0.29] 與「範圍嚴重錯位」的錯誤結論。必須先 `_normalize_lighting`(production 是對 CLAHE 後的裁切計分)→ 真實範圍 [0.20, 0.62]。驗證腳本必須忠實復現 pipeline,否則會給誤導的優化建議。
 - **gdown 抓官方 FFHQ 逐圖 Drive ID**:NVIDIA Drive 資料夾擋 gdown。改用 HuggingFace `gaunernst/ffhq-1024-wds` 串流鏡像(只抓需要的 12 個 shard)。
@@ -33,15 +42,34 @@
 - **找 melasma/MASI、rosacea CEA 分級的公開影像資料集**:確認不存在(相關研究全為院內 VISIA 私有資料)。下次別再重找。
 
 ### ⏭️ 待辦(排序)
-1. 重新部署 Streamlit Cloud(v2 + wrinkle range 重校)。
-2. 實況拍攝 JS HUD 補上光照均勻 + 皮膚可見度兩項新檢查的即時提示。
-3. 縱向圖表加 scoring_version 邊界註記(CTO call 前)。
-4. 寫信向 Kesty(drkesty@stpeteskinandlaser.com)申請 SkinAnalysis 資料集(五指標最佳對應,須申請)。
-5. 考慮為可重現性評測挑一張分數落中段(非高紋理天花板)的參考臉,讓皺紋 σ 不再被 p95 夾制稀釋。
+1. **Eric push/merge** `feat/face-capture-ux`(20 commits)+ `feat/trend-scoring-version`(+1)。
+2. 重新部署 Streamlit Cloud(v2 scoring + capture 大改 + 趨勢標註)後 smoke test。
+3. 寫信向 Kesty(drkesty@stpeteskinandlaser.com)申請 SkinAnalysis 資料集(五指標最佳對應,須申請)。
+4. (選)把 fit-to-oval gate 數學抽到 `capture_logic.js` 加單元測試(final-review I3,若該邏輯再變動)。
+5. (選)為可重現性評測挑一張分數落中段的參考臉,讓皺紋 σ 不再被 p95 夾制稀釋。
+
+**✅ 本 session 已完成(原待辦)**:縱向圖表 scoring_version 邊界註記(→ `feat/trend-scoring-version`);實況拍攝體驗(超出原「HUD 補檢查」範圍,做成完整重做)。
 
 ---
 
 ## 進度日誌
+
+## 2026-07-06 — Session 7:實況拍攝體驗全面重做 + 縱向趨勢版本標註
+
+**起因**:Eric 實機測試拍照後回饋——正臉太快、側臉難拍、引導文字左右相反、臉沒對進圓圈也拍。典型「靜態測試都過但實際體驗差」,實機回饋才是 ground truth。
+
+**A. 拍照體驗重做(branch `feat/face-capture-ux`,20 commits `9da368a..6445b34`,未 push)**
+- 先做研究:`CAPTURE_STABILITY_RESEARCH.md`(診間站 vs 引導手機拍;固定站鎖姿勢/距離/光照均勻,軟體可逼近,硬體唯一不可取代是絕對光譜=絕對診斷才需要;RCT 證據:AI gate 降爛照 68%、AbbVie AR app 勝診間 DSLR);`NATIVE_AR_CAPTURE_EVALUATION.md`(結論留網頁——ARCore 也單鏡頭,只有 iOS+TrueDepth 是真升級=平台改寫)。
+- 前 8 任務走 subagent-driven(每任務兩段審查);實機回饋後改**貼身直接迭代**:3 秒倒數→1.5 秒時間制持住;引導文字移出鏡像畫布;手動快門逃生口+最小臉部大小;**橢圓即判斷**(fit-to-oval:置中+填滿,繪製與判斷共用幾何);側臉填滿門檻 0.82>正臉 0.72;ghost 預設關。
+- 過程 bug:長命 Streamlit 熱重載造成 SQLModel「Table already defined」→ 重啟乾淨進程解決(非程式碼 bug)。
+- 最終整支審查(opus)= **Ready with fixes**(0 Critical);I1 死參數 + I2 無用 `stabilityStep`(含假測試)已 prune;I3(fit-oval gate 無自動測試)記 follow-up。
+
+**B. 縱向趨勢圖 scoring_version 邊界標註(branch `feat/trend-scoring-version`,+1 commit `9f146b6`)**
+- `line_chart` 在相鄰就診計分版本改變處畫橘色虛線 + 「計分公式 vN 起」標籤;有邊界時 caption 加警語。避免 v1/v2 分數落差被誤讀成皮膚變化。
+- 邊界偵測抽成純函式 `visualization.scoring_version_boundaries` + 4 個單元測試(避免匯入 app.py 的 Streamlit 副作用)。合成資料 headless 截圖驗證外觀。
+- 踩到 plotly `add_vline`+annotation 在日期軸會爆(對 x 做算術)→ 改 `add_shape`+`add_annotation`。
+
+**收尾**:全套 **113 passed**、ruff 乾淨。記憶快照 + MEMORY.md + CLAUDE.md §12 同步。兩條分支拆開(capture 與 trend 是不相關功能,分開 review/merge)。Eric 核准拍照體驗。
 
 ## 2026-07-04 — Session 5:真實資料驗證骨架(3 資料集 + 3 腳本,對 ground-truth 打分)
 

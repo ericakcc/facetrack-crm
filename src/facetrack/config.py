@@ -108,13 +108,22 @@ SCORING_VERSION: int = 2
 # "user is still perfectly square to the camera". Front tolerance is ±15°,
 # so a 5° profile threshold still gives a clean discrimination band.
 PROFILE_YAW_MIN_DEG: float = 5.0
-PROFILE_PITCH_TOLERANCE_DEG: float = 15.0
-LIVE_CAPTURE_STABILITY_FRAMES: int = 10
-LIVE_CAPTURE_COUNTDOWN_MS: int = 3000
+# Turning the head to hit the yaw threshold naturally shifts pitch too (the
+# neck doesn't rotate on a perfect vertical axis); 15° was unreachable for
+# most users mid-turn and made the side capture feel broken. Widened to 25°
+# per real-device feedback (2026-07-06) — still tight enough to reject a
+# genuinely tilted/nodding pose.
+PROFILE_PITCH_TOLERANCE_DEG: float = 25.0
 
-# Face-distance gating. Computed in the JS component as the ratio of the face
-# bounding-box width to the frame width. Skin texture metrics (pore, wrinkle)
-# need ≥ ~35% face fill to be reliable; > 75% risks clipping the chin / ears
-# and confuses the alignment landmarks.
-LIVE_CAPTURE_MIN_FACE_WIDTH_RATIO: float = 0.35
-LIVE_CAPTURE_MAX_FACE_WIDTH_RATIO: float = 0.75
+# Elapsed-time hold before auto-capture locks (replaces the frame-count
+# stability meter, which was frame-rate dependent and felt instant on fast
+# machines — real-device feedback: front capture fired in ~0.7s with no time
+# to react). 1.5s reliably feels deliberate and lets the progress ring
+# visibly fill before the ~500ms sharpest-frame burst fires.
+LIVE_CAPTURE_HOLD_MS: int = 1500
+
+# Short burst window (ms) after lock; the sharpest in-tolerance frame in this
+# window is kept. Replaces the old fixed 3 s countdown dead-wait.
+LIVE_CAPTURE_BURST_MS: int = 500
+# EMA smoothing factor for head-pose angles (higher = snappier, less smooth).
+LIVE_CAPTURE_POSE_EMA_ALPHA: float = 0.35

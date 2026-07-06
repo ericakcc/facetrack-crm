@@ -15,10 +15,34 @@ signal the score is derived from (TDD §3 explainability promise).
 
 from __future__ import annotations
 
+from datetime import date
+
 import cv2
 import numpy as np
 
-from facetrack.db import Region
+from facetrack.db import Region, Visit
+
+
+def scoring_version_boundaries(visits: list[Visit]) -> list[tuple[date, int]]:
+    """Dates where the scoring-formula version changes between consecutive visits.
+
+    Used by the longitudinal trend chart to mark where a score step may be an
+    artefact of a formula change rather than a real skin change.
+
+    Args:
+        visits: Visits in chronological (visit_date-ascending) order.
+
+    Returns:
+        ``(boundary_date, new_version)`` for each visit whose ``scoring_version``
+        differs from the previous visit's — i.e. the first visit scored under a
+        new formula. Empty when every visit shares one version.
+    """
+    return [
+        (visits[i].visit_date, visits[i].scoring_version)
+        for i in range(1, len(visits))
+        if visits[i].scoring_version != visits[i - 1].scoring_version
+    ]
+
 
 # Distinct colors per ROI (BGR). Chosen for high-contrast against skin.
 ROI_COLORS_BGR: dict[Region, tuple[int, int, int]] = {
