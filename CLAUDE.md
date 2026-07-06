@@ -4,7 +4,7 @@
 > read this file first. It is the single source of truth for project status,
 > known inconsistencies, and open decisions.
 >
-> **Last updated**: 2026-07-05 (Session 6 — FFHQ retune + validation benchmark layer)
+> **Last updated**: 2026-07-06 (Session 7 — live-capture UX overhaul; see §12 end)
 > **Deadline**: submission sent 2026-05-19; current work targets the follow-up
 > panel calls (product-lead PRD call + CTO technical call)
 >
@@ -426,11 +426,38 @@ points (was ≤ 5.5).
   exposure both directions, lighting asymmetry ±, skip-without-face,
   sharpness resolution-invariance, skin visibility ±, WB gain clamp).
 
+### Session 7 — live-capture UX overhaul (branch `feat/face-capture-ux`)
+
+Reworked the live MediaPipe capture widget after real-device testing. Key
+changes in `src/facetrack/components/face_capture/frontend/index.html` +
+`config.py` + the `face_capture()` wrapper + `app.py`:
+- **Fit-to-oval gate**: the on-screen target oval IS the capture condition
+  now — the face bbox must be centred in AND fill the oval (`fillFrac` vs
+  `cfg.ovalFillMin`/`ovalFillMinProfile`, `offCentre` check), replacing the
+  old width-ratio distance check. Draw + gate share one cfg oval geometry.
+  Side/profile requires a higher fill (`ovalFillMinProfile`, default 0.82)
+  than front (0.72) — tune these two if capture feels strict/loose.
+- **Time-based 1.5 s hold** (`heldSince`/`cfg.holdMs`) replaces the old 3 s
+  countdown AND the frame-count stability meter — frame-rate independent.
+- **Manual shutter** (`#shutterBtn`) = escape hatch bypassing angle/pose
+  gating, but still enforces min face size (`lastFillFrac`).
+- **Off-canvas guidance**: all directional text now drives the unmirrored
+  HTML `#instruction` (the `<canvas>` has `scaleX(-1)`, so on-canvas text
+  rendered backwards — that bug is fixed by never drawing text on canvas).
+- **Ghost overlay** (prior-visit photo) is now OFF by default, opacity 0.18.
+- Design/research: `docs/CAPTURE_STABILITY_RESEARCH.md`,
+  `docs/NATIVE_AR_CAPTURE_EVALUATION.md` (verdict: stay web; native AR only
+  helps on iOS+TrueDepth — ARCore is also monocular). Plan/spec under
+  `docs/superpowers/`. Pure JS logic extracted to `frontend/capture_logic.js`
+  (Playwright-tested). This overhaul supersedes the old "port lighting/skin
+  checks to the HUD" follow-up below.
+
 ### Known follow-ups (not regressions)
 
-- The live-capture JS HUD does not yet mirror the lighting/skin checks —
-  a side-lit user only learns at server-side gate time. Port the two
-  checks to `index.html` for real-time guidance.
+- Capture tuning constants (`cfg.ovalFillMin*`, `holdMs`, tolerances) live in
+  `index.html`'s `cfg` object; some Python-threaded values
+  (`minFaceWidthRatio`, `LIVE_CAPTURE_STABILITY_FRAMES`) are now unused after
+  the rework — safe to prune.
 - `data/facetrack.db` on disk still has v1-scored visits (tagged
   scoring_version=1 by migration). Longitudinal charts do not yet draw a
   version-boundary annotation — worth adding before the CTO call.
