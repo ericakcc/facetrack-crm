@@ -461,6 +461,11 @@ changes in `src/facetrack/components/face_capture/frontend/index.html` +
   rework.~~ Pruned in the merge-readiness cleanup (2026-07-06); JS
   `frontYawTolDeg`/`frontPitchTolDeg` defaults also corrected to 15/17 to
   match the Python side.
+- The fit-to-oval capture gate (`fillFrac` / `offCentre` / per-mode `fillMin`
+  in the `index.html` loop) is live-validated only — no automated test. If
+  that math churns again, extract it into `capture_logic.js` (pure, like the
+  EMA smoother) and unit-test it. (Final-review I3, deferred to avoid
+  destabilizing code the user had just validated by webcam.)
 - `data/facetrack.db` on disk still has v1-scored visits (tagged
   scoring_version=1 by migration). Longitudinal charts do not yet draw a
   version-boundary annotation — worth adding before the CTO call.
