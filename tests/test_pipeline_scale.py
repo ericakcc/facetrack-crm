@@ -29,7 +29,10 @@ from facetrack.cv_pipeline import (
 )
 from facetrack.scoring import score_region
 
-TEST_IMAGE = Path(__file__).resolve().parents[1] / "data" / "test_images" / "test_1.png"
+# 2x Lanczos upscale of the CC0 StyleGAN face test_face_1.jpg — large enough
+# that the half-resolution variant below still exceeds the 512px normalization
+# width, so both sides of the invariance check go through the downscale path.
+TEST_IMAGE = Path(__file__).resolve().parents[1] / "data" / "test_images" / "test_face_1_hires.png"
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +82,7 @@ def test_undersampled_face_rejected_by_gate(pipeline: FacePipeline) -> None:
 def test_scores_stable_across_input_resolution(pipeline: FacePipeline) -> None:
     """The same photo at full and half input resolution must produce nearly
     identical scores. Before normalization the measured drift reached
-    +4.4 points (pore, left cheek, this very image)."""
+    +4.4 points (pore, left cheek, on the original calibration capture)."""
     img = cv2.imread(str(TEST_IMAGE))
     small = cv2.resize(img, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
 

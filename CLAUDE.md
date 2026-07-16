@@ -102,7 +102,9 @@ Append, do not delete — the history is itself useful context for future agents
 
 | 2026-07-05 | This branch (FFHQ retune + validation benchmark layer) left CLAUDE.md stale: §12 still described `WRINKLE_RAW_RANGE` as `(0.25, 0.75)` after it was retuned to `(0.20, 0.62)` against FFHQ ground truth; the 2026-07-04 reproducibility log row's σ̄ 0.197 vs 0.747 figures were the pre-retune measurement, since superseded; §6 still said "92 tests pass across 9 files" (actual: 97 across 10 files — 92 fast + 5 opt-in real-data benchmarks). | All synced: §12 now notes the retune and points to `docs/VALIDATION.md` for the current range and reproducibility numbers; every test-count mention updated to 97/10; `docs/VALIDATION.md` added to the §3 doc map. |
 
-Currently open: **none** (as of 2026-07-05). If you find new drift, add a row.
+| 2026-07-16 | `data/test_images/test_{1,2,3}.png` (added in Session 3, labeled "Three CC0 test faces" in §11) were actually **real-person selfie captures** — violating §7.5 "No real-person images in the repo" — and had been pushed to the public GitHub repo on all four branches. | Files removed and scrubbed from **all git history** via `git filter-repo`; all four branches force-pushed. `tests/test_pipeline_scale.py` re-pointed to `test_face_1_hires.png`, a 2× Lanczos upscale of the CC0 `test_face_1.jpg` (the upscale keeps the half-resolution drift check above the 512px normalization width — the 1024px originals fail it at 1.69–3.05 vs the 1.5 budget). `.gitignore` hardened against re-adding the scrubbed paths; §11 row corrected. **Note:** the rewrite changed every commit hash from Session 3 (2026-05-18) onward — hash references in these docs older than 2026-07-16 are historical labels, not resolvable refs. |
+
+Currently open: **none** (as of 2026-07-16). If you find new drift, add a row.
 
 ## 6. Pickup checklist for the next session
 
@@ -296,7 +298,7 @@ the DB as a presentable case for the Loom recording.
 | `tests/test_patient_service.py` | CRUD + soft-delete + restore + listing-excludes-soft-deleted contract. |
 | `tests/test_score_display.py` | Inversion direction per metric (pigmentation/erythema/wrinkle/pore inverted; uniformity passthrough), band thresholds, colour assignment. |
 | `.env.example` | Template for `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `LLM_MODEL`, `GEMINI_MODEL`, `LLM_BACKEND`. Real `.env` is gitignored. |
-| `data/test_images/test_{1,2,3}.png` | Three CC0 test faces referenced by the deploy smoke-test in §6. |
+| `data/test_images/test_{1,2,3}.png` | ~~Three CC0 test faces~~ — **mislabeled**: these were real-person selfie captures, violating §7.5. Removed and scrubbed from all git history on 2026-07-16 (see §5 log). The scale tests now use `test_face_1_hires.png`, a 2× Lanczos upscale of the genuinely-CC0 `test_face_1.jpg`. |
 
 ### Modified files
 
