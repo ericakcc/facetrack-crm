@@ -55,6 +55,14 @@ data/validation/acne04/.cache/
 data/test_images/self_*.jpg
 data/test_images/self_*.png
 data/test_images/self_*.jpeg
+# test_{1,2,3}.png were real-person captures mislabeled as CC0; removed and
+# scrubbed from git history 2026-07-16 (CLAUDE.md §5). Never re-add them.
+data/test_images/test_1.png
+data/test_images/test_2.png
+data/test_images/test_3.png
+
+# Local-only draft notes — not for the public repo
+docs/facetrack-principles*.html
 
 # Streamlit
 .streamlit/secrets.toml
